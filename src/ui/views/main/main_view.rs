@@ -1,11 +1,14 @@
 use std::sync::Arc;
-use egui::{Ui, SidePanel, CentralPanel, TopBottomPanel, Layout, RichText, Menu, ScrollArea};
+use egui::{Ui, SidePanel, CentralPanel, TopBottomPanel, Layout, RichText, menu, ScrollArea, Color32, Context};
 use anyhow::Result;
 use rfd::FileDialog;
 use log::{info, error};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
-use crate::core::{FeedRepository, CategoryRepository, ArticleRepository};
+use crate::base::repository::{FeedRepository, CategoryRepository, ArticleRepository};
 use crate::models::{Article, Feed, Category, Tag};
+use crate::models::article::ArticleId;
 use crate::services::{RssService, WebViewService, SyncService, OpmlService};
 use crate::ui::components::{
     Sidebar, SidebarSelection,
@@ -16,6 +19,13 @@ use crate::ui::components::{
     SettingsDialog,
 };
 use crate::ui::styles::{AppColors, DEFAULT_PADDING};
+use crate::ui::{
+    components::{sidebar::Sidebar, article_viewer::ArticleViewer},
+    context::Context,
+    theme::AppColors,
+};
+use crate::models::{article::Article, article::ArticleId, category::CategoryId};
+use egui::{Context as EguiContext, Ui};
 
 /// Main view component that organizes the application layout
 pub struct MainView {
@@ -41,7 +51,8 @@ pub struct MainView {
     // UI State
     colors: AppColors,
     show_sync_indicator: bool,
-    status_message: Option<(String, f32)>, // (message, time_remaining)
+    status_message: Option<(String, Instant)>,
+    selected_article: Option<ArticleId>,
 }
 
 impl MainView {
@@ -54,260 +65,154 @@ impl MainView {
         webview_service: Arc<WebViewService>,
         sync_service: Arc<SyncService>,
     ) -> Self {
+        let colors = AppColors::default();
         Self {
             sidebar: Sidebar::new(feed_repository.clone(), category_repository.clone()),
-            article_list: ArticleList::new(article_repository.clone()),
-            article_viewer: ArticleViewer::new(article_repository.clone(), webview_service.clone()),
-            feed_manager: FeedManager::new(
-                feed_repository.clone(),
-                category_repository.clone(),
+            article_list: ArticleList::new(article_repository.clone(), rss_service.clone(), colors.clone()),
+            article_viewer: ArticleViewer::new(
+                article_repository.clone(),
+                webview_service.clone(),
                 rss_service.clone(),
+                colors.clone(),
             ),
-            category_manager: CategoryManager::new(category_repository.clone()),
-            settings_dialog: SettingsDialog::new(sync_service.clone()),
+            feed_manager: FeedManager::new(rss_service.clone(), colors.clone()),
+            category_manager: CategoryManager::new(category_repository.clone(), colors.clone()),
+            settings_dialog: SettingsDialog::new(sync_service.clone(), colors.clone()),
             feed_repository,
             category_repository,
             article_repository,
             rss_service,
             webview_service,
             sync_service,
-            opml_service: Arc::new(OpmlService::new()),
-            colors: AppColors::default(),
+            opml_service: Arc::new(OpmlService::new(rss_service.clone())),
+            colors,
             show_sync_indicator: false,
             status_message: None,
+            selected_article: None,
         }
     }
     
     /// Renders the main view UI
-    pub fn ui(&mut self, ctx: &egui::Context) -> Result<()> {
-        self.update_status(ctx.input().predicted_dt);
-        
-        // Top menu bar
-        TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                // Feed menu
-                Menu::new("Feed", RichText::new("Feed").size(14.0)).show(ui, |ui| {
-                    if ui.button("Add Feed...").clicked() {
-                        self.feed_manager.open_add();
-                    }
-                    if ui.button("Import OPML...").clicked() {
-                        self.import_opml();
-                    }
-                    if ui.button("Export OPML...").clicked() {
-                        self.export_opml();
-                    }
-                    ui.separator();
-                    if ui.button("Sync All Feeds").clicked() {
-                        self.sync_all_feeds();
-                    }
-                });
-                
-                // Categories menu
-                Menu::new("Categories", RichText::new("Categories").size(14.0)).show(ui, |ui| {
-                    if ui.button("Manage Categories...").clicked() {
-                        self.category_manager.open();
-                    }
-                });
-                
-                // View menu
-                Menu::new("View", RichText::new("View").size(14.0)).show(ui, |ui| {
-                    ui.menu_button("Sort By", |ui| {
-                        if ui.radio_value(
-                            &mut self.article_list.sort_order,
-                            ArticleSortOrder::NewestFirst,
-                            "Newest First"
-                        ).clicked() {
-                            self.article_list.refresh()?;
-                        }
-                        if ui.radio_value(
-                            &mut self.article_list.sort_order,
-                            ArticleSortOrder::OldestFirst,
-                            "Oldest First"
-                        ).clicked() {
-                            self.article_list.refresh()?;
-                        }
-                    });
-                    ui.separator();
-                    if ui.button("Settings...").clicked() {
-                        self.settings_dialog.open();
-                    }
-                });
-                
-                // Show sync indicator if active
-                if self.show_sync_indicator {
-                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spinner();
-                        ui.label("Syncing feeds...");
-                    });
-                }
-            });
-        });
-        
-        // Status bar
-        if let Some((message, _)) = &self.status_message {
-            TopBottomPanel::bottom("status_bar")
-                .min_height(24.0)
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(message);
-                    });
-                });
-        }
-        
-        // Left sidebar with feeds and categories
-        SidePanel::left("sidebar")
-            .resizable(true)
-            .min_width(250.0)
+    pub async fn show(&mut self, ctx: &Context) -> Result<()> {
+        egui::SidePanel::left("sidebar")
             .show(ctx, |ui| {
-                if let Some(selection) = self.sidebar.ui(ui)? {
-                    self.handle_sidebar_selection(&selection)?;
-                }
+                self.sidebar.show(ui);
             });
-        
-        // Article list panel
-        SidePanel::left("article_list")
-            .resizable(true)
-            .min_width(300.0)
-            .show(ctx, |ui| {
-                self.render_article_list(ui)?;
-            });
-        
-        // Main content area with article viewer
-        CentralPanel::default().show(ctx, |ui| {
-            self.article_viewer.ui(ui)?;
-        });
-        
-        // Modal dialogs
-        self.feed_manager.show(ui)?;
-        self.category_manager.show(ui)?;
-        self.settings_dialog.show(ui)?;
-        
-        Ok(())
-    }
-    
-    /// Renders the article list
-    fn render_article_list(&mut self, ui: &mut Ui) -> Result<()> {
-        let articles = match self.sidebar.get_selection() {
-            Some(SidebarSelection::AllFeeds) => self.article_list.get_all_articles()?,
-            Some(SidebarSelection::Favorites) => self.article_list.get_favorite_articles()?,
-            Some(SidebarSelection::Feed(feed)) => self.article_list.get_feed_articles(&feed.id)?,
-            Some(SidebarSelection::Category(category_id)) => {
-                let mut articles = Vec::new();
-                if let Ok(feeds) = self.feed_repository.get_feeds_by_category(&category_id) {
-                    for feed in feeds {
-                        if let Ok(mut feed_articles) = self.article_list.get_feed_articles(&feed.id) {
-                            articles.append(&mut feed_articles);
-                        }
-                    }
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if let Some(article_id) = self.selected_article {
+                if let Ok(Some(article)) = ctx.rss_service.get_article(&article_id).await {
+                    self.article_viewer.show(ui);
                 }
-                articles
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.label("Select an article to view");
+                });
             }
-            None => Vec::new(),
-        };
-        
-        if let Some(article_id) = self.article_list.ui(ui, &articles)? {
-            self.article_viewer.load_article(&article_id)?;
-        }
-        
+        });
+
+        egui::TopBottomPanel::top("top_panel")
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Categories").clicked() {
+                        self.category_manager.show(ui);
+                    }
+                    if ui.button("Settings").clicked() {
+                        self.settings_dialog.show(ui);
+                    }
+                    if ui.button("Sync All").clicked() {
+                        if let Err(e) = self.sync_all().await {
+                            log::error!("Error syncing feeds: {}", e);
+                        }
+                    }
+                });
+            });
+
         Ok(())
     }
     
     /// Handles selection changes in the sidebar
-    fn handle_sidebar_selection(&mut self, selection: &SidebarSelection) -> Result<()> {
-        // Clear current article selection when changing feeds/categories
-        self.article_viewer.clear();
-        self.article_list.set_selected_article(None);
-        
+    async fn handle_sidebar_selection(&mut self, selection: String) -> Result<()> {
+        match selection.as_str() {
+            "all" => {
+                let articles = self.rss_service.get_all_articles().await?;
+                self.article_list.set_articles(articles);
+            }
+            "favorites" => {
+                let articles = self.rss_service.get_favorited_articles().await?;
+                self.article_list.set_articles(articles);
+            }
+            "unread" => {
+                let articles = self.rss_service.get_unread_articles().await?;
+                self.article_list.set_articles(articles);
+            }
+            feed_id if feed_id.starts_with("feed:") => {
+                let feed_id = FeedId(feed_id[5..].to_string());
+                let articles = self.rss_service.get_articles_by_feed(&feed_id).await?;
+                self.article_list.set_articles(articles);
+            }
+            category_id if category_id.starts_with("category:") => {
+                let category_id = CategoryId(category_id[9..].to_string());
+                let feeds = self.rss_service.get_feeds_by_category(&category_id).await?;
+                let mut articles = Vec::new();
+                for feed in feeds {
+                    if let Ok(feed_articles) = self.rss_service.get_articles_by_feed(&feed.id).await {
+                        articles.extend(feed_articles);
+                    }
+                }
+                self.article_list.set_articles(articles);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    
+    /// Handles article selection
+    fn handle_article_selection(&mut self, article_id: ArticleId) -> Result<()> {
+        if let Some(article) = self.rss_service.get_article(&article_id).await? {
+            self.article_viewer.set_article(article);
+        }
         Ok(())
     }
     
     /// Updates status messages and indicators
-    fn update_status(&mut self, dt: f32) {
-        // Update status message lifetime
+    fn update_status(&mut self, ctx: &Context) {
         if let Some((msg, time)) = &mut self.status_message {
-            *time -= dt;
-            if *time <= 0.0 {
+            if time.elapsed() > Duration::from_secs(5) {
                 self.status_message = None;
+            } else {
+                TopBottomPanel::bottom("status").show(ctx, |ui| {
+                    ui.label(RichText::new(msg.to_string()).color(Color32::WHITE));
+                });
             }
         }
     }
     
     /// Sets a temporary status message
-    fn set_status(&mut self, message: String, duration: f32) {
-        self.status_message = Some((message, duration));
-    }
-    
-    /// Imports feeds from an OPML file
-    fn import_opml(&mut self) {
-        if let Some(path) = FileDialog::new()
-            .add_filter("OPML Files", &["opml", "xml"])
-            .pick_file()
-        {
-            match self.opml_service.import(&path) {
-                Ok((feeds, categories)) => {
-                    // Save categories first
-                    for category in categories {
-                        if let Err(e) = self.category_repository.save_category(&category) {
-                            error!("Failed to save category: {}", e);
-                        }
-                    }
-                    
-                    // Then save feeds
-                    for feed in feeds {
-                        if let Err(e) = self.feed_repository.save_feed(&feed) {
-                            error!("Failed to save feed: {}", e);
-                        }
-                    }
-                    
-                    self.set_status(format!("Imported {} feeds", feeds.len()), 3.0);
-                }
-                Err(e) => {
-                    error!("Failed to import OPML: {}", e);
-                    self.set_status("Failed to import OPML file".to_string(), 3.0);
-                }
-            }
-        }
-    }
-    
-    /// Exports feeds to an OPML file
-    fn export_opml(&mut self) {
-        if let Some(path) = FileDialog::new()
-            .add_filter("OPML Files", &["opml"])
-            .save_file()
-        {
-            match (
-                self.feed_repository.get_all_feeds(),
-                self.category_repository.get_all_categories(),
-            ) {
-                (Ok(feeds), Ok(categories)) => {
-                    if let Err(e) = self.opml_service.export(&path, &feeds, &categories) {
-                        error!("Failed to export OPML: {}", e);
-                        self.set_status("Failed to export OPML file".to_string(), 3.0);
-                    } else {
-                        self.set_status("OPML file exported successfully".to_string(), 3.0);
-                    }
-                }
-                _ => {
-                    self.set_status("Failed to export OPML file".to_string(), 3.0);
-                }
-            }
-        }
+    fn set_status_message(&mut self, message: String) {
+        self.status_message = Some((message, Instant::now()));
     }
     
     /// Synchronizes all feeds
-    fn sync_all_feeds(&mut self) {
+    pub async fn sync_all(&mut self) -> Result<()> {
         self.show_sync_indicator = true;
-        
-        match self.sync_service.sync_all_feeds() {
-            Ok(_) => {
-                self.set_status("All feeds synchronized".to_string(), 3.0);
-            }
-            Err(e) => {
-                error!("Failed to sync feeds: {}", e);
-                self.set_status("Failed to synchronize feeds".to_string(), 3.0);
-            }
-        }
-        
+        self.rss_service.fetch_all_feeds().await?;
+        self.sidebar.refresh().await?;
+        self.set_status_message("Sync completed successfully".to_string());
         self.show_sync_indicator = false;
+        Ok(())
+    }
+    
+    async fn refresh(&mut self) -> Result<()> {
+        self.sidebar.refresh().await?;
+        Ok(())
+    }
+
+    pub fn select_article(&mut self, article_id: ArticleId) {
+        self.selected_article = Some(article_id);
+    }
+
+    pub fn select_category(&mut self, category_id: CategoryId) {
+        self.sidebar.select_category(category_id);
     }
 }

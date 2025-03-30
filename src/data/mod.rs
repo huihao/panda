@@ -15,3 +15,6 @@ pub use crate::base::{ArticleRepository, FeedRepository, TagRepository};
 // Re-export database module
 pub use crate::data::database::Database;
 pub use crate::data::types::*;
+
+pub use database::*;
+pub use repositories::*;

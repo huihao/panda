@@ -1,11 +1,13 @@
+use egui::{Ui, ScrollArea, RichText, Label, TextEdit, Frame, Color32};
 use std::sync::Arc;
-use anyhow::Result;
-use egui::{Ui, ScrollArea, RichText, Label, TextEdit, Frame};
 use log::error;
-
-use crate::core::{FeedRepository, CategoryRepository};
+use anyhow::Result;
+use crate::base::repository::{FeedRepository, CategoryRepository};
 use crate::models::{Feed, Category, CategoryId};
 use crate::ui::styles::{AppColors, DEFAULT_PADDING};
+use crate::ui::context::Context;
+use crate::models::{category::Category, category::CategoryId, article::ArticleId};
+use std::collections::HashSet;
 
 /// Sidebar selection state
 #[derive(Debug, Clone, PartialEq)]
@@ -25,7 +27,9 @@ pub struct Sidebar {
     feeds: Vec<Feed>,
     categories: Vec<Category>,
     search_query: String,
-    expanded_categories: std::collections::HashSet<CategoryId>,
+    expanded_categories: HashSet<CategoryId>,
+    selected_category: Option<CategoryId>,
+    selected_article: Option<ArticleId>,
 }
 
 impl Sidebar {
@@ -42,17 +46,17 @@ impl Sidebar {
             feeds: Vec::new(),
             categories: Vec::new(),
             search_query: String::new(),
-            expanded_categories: std::collections::HashSet::new(),
+            expanded_categories: HashSet::new(),
+            selected_category: None,
+            selected_article: None,
         }
     }
     
     /// Renders the sidebar UI
     pub fn ui(&mut self, ui: &mut Ui) -> Result<Option<SidebarSelection>> {
-        let mut selected = None;
+        self.refresh()?;
         
-        // Refresh data
-        self.feeds = self.feed_repository.get_all_feeds()?;
-        self.categories = self.category_repository.get_all_categories()?;
+        let mut selection = None;
         
         // Search box
         ui.horizontal(|ui| {
@@ -74,7 +78,7 @@ impl Sidebar {
             ui.horizontal(|ui| {
                 ui.add(Label::new(
                     RichText::new("📚 All Articles")
-                        .color(self.colors.accent)
+                        .color(self.colors.text)
                         .size(14.0)
                 ));
             });
@@ -85,7 +89,7 @@ impl Sidebar {
                     .size(14.0)
             )).clicked() {
                 self.selection = Some(SidebarSelection::AllFeeds);
-                selected = Some(SidebarSelection::AllFeeds);
+                selection = Some(SidebarSelection::AllFeeds);
             }
         }
         
@@ -104,7 +108,7 @@ impl Sidebar {
                     .size(14.0)
             )).clicked() {
                 self.selection = Some(SidebarSelection::Favorites);
-                selected = Some(SidebarSelection::Favorites);
+                selection = Some(SidebarSelection::Favorites);
             }
         }
         
@@ -114,7 +118,7 @@ impl Sidebar {
         ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                self.render_categories(ui, None, 0, &mut selected)?;
+                self.render_categories(ui, None, 0, &mut selection)?;
                 
                 // Show uncategorized feeds
                 let uncategorized: Vec<_> = self.feeds.iter()
@@ -126,17 +130,17 @@ impl Sidebar {
                     ui.add_space(DEFAULT_PADDING);
                     ui.add(Label::new(
                         RichText::new("Uncategorized")
-                            .color(self.colors.text_dimmed)
+                            .color(self.colors.text_secondary)
                             .size(12.0)
                     ));
                     
                     for feed in uncategorized {
-                        self.render_feed(ui, feed, 1, &mut selected);
+                        self.render_feed(ui, feed, 1, &mut selection);
                     }
                 }
             });
         
-        Ok(selected)
+        Ok(selection)
     }
     
     /// Renders categories recursively
@@ -152,7 +156,7 @@ impl Sidebar {
             .collect();
         
         for category in categories {
-            let indent = depth * 16.0;
+            let indent = (depth as f32) * 16.0;
             ui.add_space(4.0);
             
             ui.horizontal(|ui| {
@@ -167,7 +171,7 @@ impl Sidebar {
                     let toggle_text = if is_expanded { "▼" } else { "▶" };
                     if ui.add(Label::new(
                         RichText::new(toggle_text)
-                            .color(self.colors.text_dimmed)
+                            .color(self.colors.text_secondary)
                             .size(10.0)
                     )).clicked() {
                         if is_expanded {
@@ -228,7 +232,7 @@ impl Sidebar {
         depth: usize,
         selected: &mut Option<SidebarSelection>,
     ) {
-        let indent = depth * 16.0;
+        let indent = (depth as f32) * 16.0;
         ui.horizontal(|ui| {
             ui.add_space(indent + 14.0); // Add space for alignment with categories
             
@@ -267,5 +271,53 @@ impl Sidebar {
         let query = self.search_query.to_lowercase();
         feed.title.to_lowercase().contains(&query) ||
             feed.url.to_string().to_lowercase().contains(&query)
+    }
+
+    pub fn show(&mut self, ui: &mut Ui) -> Result<()> {
+        self.ui(ui)?;
+        Ok(())
+    }
+
+    fn render_category(&mut self, ui: &mut Ui, category: &Category) -> Result<()> {
+        let label_text = format!("📁 {}", category.name);
+        if self.selection == Some(SidebarSelection::Category(category.id.clone())) {
+            ui.add(Label::new(
+                RichText::new(label_text)
+                    .color(self.colors.accent)
+                    .size(14.0)
+            ));
+        } else {
+            if ui.add(Label::new(
+                RichText::new(label_text)
+                    .color(self.colors.text)
+                    .size(14.0)
+            )).clicked() {
+                self.selection = Some(SidebarSelection::Category(category.id.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn select_category(&mut self, category_id: CategoryId) {
+        self.selected_category = Some(category_id);
+    }
+
+    pub fn toggle_category(&mut self, category_id: CategoryId) {
+        if self.expanded_categories.contains(&category_id) {
+            self.expanded_categories.remove(&category_id);
+        } else {
+            self.expanded_categories.insert(category_id);
+        }
+    }
+
+    pub async fn refresh(&mut self) -> Result<()> {
+        self.feeds = self.feed_repository.get_all_feeds()?;
+        self.categories = self.category_repository.get_all_categories()?;
+        self.feeds.sort_by(|a, b| a.title.cmp(&b.title));
+        self.categories.sort_by(|a, b| a.name.cmp(&b.name));
+        self.selected_category = None;
+        self.selected_article = None;
+        self.expanded_categories.clear();
+        Ok(())
     }
 }

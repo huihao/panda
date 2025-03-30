@@ -9,7 +9,7 @@ use quick_xml::Writer;
 use log::{info, error};
 use std::sync::Arc;
 
-use crate::core::{FeedRepository, CategoryRepository};
+use crate::base::repository::{FeedRepository, CategoryRepository};
 use crate::models::{Feed, Category, CategoryId};
 
 /// Service for importing and exporting OPML files

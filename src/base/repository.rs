@@ -33,6 +33,15 @@ pub trait FeedRepository: Send + Sync {
     
     /// Searches for feeds by title or URL
     fn search_feeds(&self, query: &str) -> Result<Vec<Feed>>;
+    
+    /// Gets all feeds in a category
+    fn get_feeds_by_category(&self, category_id: &CategoryId) -> Result<Vec<Feed>>;
+    
+    /// Gets all feeds that need to be updated
+    fn get_feeds_to_update(&self) -> Result<Vec<Feed>>;
+    
+    /// Gets feeds by date range
+    fn get_feeds_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Feed>>;
 }
 
 /// Repository interface for category operations
@@ -57,6 +66,21 @@ pub trait CategoryRepository: Send + Sync {
     
     /// Searches for categories by name
     fn search_categories(&self, query: &str) -> Result<Vec<Category>>;
+    
+    /// Gets all root categories (categories without parents)
+    fn get_root_categories(&self) -> Result<Vec<Category>>;
+    
+    /// Gets all child categories of a parent category
+    fn get_child_categories(&self, parent_id: &CategoryId) -> Result<Vec<Category>>;
+    
+    /// Gets categories by date range
+    fn get_categories_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Category>>;
+    
+    /// Gets recently updated categories
+    fn get_recently_updated_categories(&self, limit: usize) -> Result<Vec<Category>>;
+    
+    /// Gets the full category hierarchy
+    fn get_category_hierarchy(&self) -> Result<Vec<Category>>;
 }
 
 /// Repository interface for feed-category relationship
@@ -89,7 +113,10 @@ pub trait ArticleRepository: Send + Sync {
     fn get_article_by_url(&self, url: &str) -> Result<Option<Article>>;
     
     /// Retrieves articles by feed ID
-    fn get_articles_by_feed(&self, feed_id: &str) -> Result<Vec<Article>>;
+    fn get_articles_by_feed(&self, feed_id: &FeedId) -> Result<Vec<Article>>;
+    
+    /// Retrieves articles by category ID
+    fn get_articles_by_category(&self, category_id: &CategoryId) -> Result<Vec<Article>>;
     
     /// Retrieves unread articles
     fn get_unread_articles(&self) -> Result<Vec<Article>>;
@@ -123,6 +150,12 @@ pub trait ArticleRepository: Send + Sync {
     
     /// Removes articles older than the specified number of days
     fn cleanup_old_articles(&self, retention_days: i64) -> Result<usize>;
+    
+    /// Gets articles by date range
+    fn get_articles_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Article>>;
+    
+    /// Gets articles by tag
+    fn get_articles_by_tag(&self, tag: &Tag) -> Result<Vec<Article>>;
 }
 
 /// Repository interface for tag operations
@@ -144,4 +177,19 @@ pub trait TagRepository: Send + Sync {
     
     /// Deletes a tag by its ID
     fn delete_tag(&self, id: &str) -> Result<()>;
+    
+    /// Searches for tags by name
+    fn search_tags(&self, query: &str) -> Result<Vec<Tag>>;
+    
+    /// Gets a tag by its name
+    fn get_tag_by_name(&self, name: &str) -> Result<Option<Tag>>;
+    
+    /// Gets tags by date range
+    fn get_tags_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Tag>>;
+    
+    /// Gets all articles with a specific tag
+    fn get_articles_with_tag(&self, tag_id: &str) -> Result<Vec<Article>>;
+    
+    /// Gets the most used tags
+    fn get_most_used_tags(&self, limit: usize) -> Result<Vec<(Tag, i64)>>;
 }

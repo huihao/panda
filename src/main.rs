@@ -3,13 +3,15 @@ mod models;
 mod services;
 mod base;
 mod utils;
+mod ui;
 
 use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use log::{info, warn};
 use url::Url;
 use data::Database;
-use services::{ArticleService, RssService, WebViewService};
+use services::{ArticleService, RssService, WebViewService, SyncService};
+use ui::views::main::MainView;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -31,11 +33,13 @@ async fn main() -> Result<()> {
     // Obtain repository instances from the database
     let article_repository = database.article_repository();
     let feed_repository = database.feed_repository();
+    let category_repository = database.category_repository();
     
     // Initialize services
     let article_service = ArticleService::new(article_repository.clone());
     let rss_service = RssService::new(feed_repository.clone(), article_repository.clone());
     let webview_service = WebViewService::new(article_service.clone());
+    let sync_service = SyncService::new(rss_service.clone());
     
     // Check if there are any feeds in the database
     let feeds = feed_repository.get_all_feeds()?;
@@ -51,18 +55,26 @@ async fn main() -> Result<()> {
     info!("Syncing feeds...");
     rss_service.fetch_all_feeds().await?;
     
-    // Get available articles after syncing
-    let articles = article_repository.get_all_articles()?;
+    // Create and run the main view
+    let options = eframe::NativeOptions {
+        initial_window_size: Some(egui::vec2(1200.0, 800.0)),
+        ..Default::default()
+    };
     
-    // Handle the case where no articles are available
-    if articles.is_empty() {
-        warn!("No articles found after syncing feeds. Nothing to display.");
-        return Ok(());
-    }
+    let main_view = MainView::new(
+        feed_repository,
+        category_repository,
+        article_repository,
+        rss_service,
+        webview_service,
+        sync_service,
+    );
     
-    // Start webview with the first available article
-    info!("Starting webview service with first available article...");
-    webview_service.create_article_view(&articles[0].id.0)?;
+    eframe::run_native(
+        "Panda RSS Reader",
+        options,
+        Box::new(|_cc| Box::new(main_view)),
+    )?;
     
     Ok(())
 }

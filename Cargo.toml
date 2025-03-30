@@ -20,3 +20,8 @@ url = { version = "2.3", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4"] }
 tao = "0.32.8"
 wry = { version = "0.50.5", features = ["default"] }
+egui = "0.26.2"
+eframe = "0.26.2"
+rfd = "0.12"
+rand = "0.8"
+quick-xml = "0.31.0"

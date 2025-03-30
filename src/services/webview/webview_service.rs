@@ -6,6 +6,7 @@ use tao::{
     window::WindowBuilder,
     dpi::LogicalSize,
 };
+use std::sync::Arc;
 
 use crate::models::article::Article;
 use crate::services::article::ArticleService;
@@ -40,7 +41,7 @@ impl WebViewService {
         // First create builder
         let builder = WebViewBuilder::new()
             .with_url("about:blank")  // No ? here as this returns WebViewBuilder, not Result
-            .with_html(generate_article_html(&article));  // No ? here as this returns WebViewBuilder, not Result
+            .with_html(self.render_article(&article));  // No ? here as this returns WebViewBuilder, not Result
             
         // Then build the webview and apply ? to the Result
         let _webview = builder.build(&window)?;  // Apply ? only to the build method which returns Result
@@ -65,56 +66,56 @@ impl WebViewService {
         #[allow(unreachable_code)]
         Ok(())
     }
-}
 
-fn generate_article_html(article: &Article) -> String {
-    format!(
-        r#"
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>{}</title>
-            <style>
-                body {{
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-                    line-height: 1.6;
-                    max-width: 800px;
-                    margin: 0 auto;
-                    padding: 20px;
-                }}
-                h1 {{
-                    color: #333;
-                    margin-bottom: 20px;
-                }}
-                .meta {{
-                    color: #666;
-                    margin-bottom: 20px;
-                }}
-                .content {{
-                    color: #333;
-                }}
-                img {{
-                    max-width: 100%;
-                    height: auto;
-                }}
-            </style>
-        </head>
-        <body>
-            <h1>{}</h1>
-            <div class="meta">
-                <p>By {} • Published on {}</p>
-            </div>
-            <div class="content">
-                {}
-            </div>
-        </body>
-        </html>
-        "#,
-        article.title,
-        article.title,
-        article.author.as_deref().unwrap_or("Unknown"),
-        article.published_at.format("%Y-%m-%d %H:%M:%S"),
-        article.content
-    )
+    pub fn render_article(&self, article: &Article) -> String {
+        let mut html = String::new();
+        
+        // Add HTML header
+        html.push_str(r#"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>"#);
+        html.push_str(&article.title);
+        html.push_str(r#"</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; }
+        h1 { color: #333; }
+        .meta { color: #666; margin-bottom: 20px; }
+        .content { color: #222; }
+    </style>
+</head>
+<body>
+    <h1>"#);
+        html.push_str(&article.title);
+        html.push_str(r#"</h1>
+    <div class="meta">"#);
+
+        // Add metadata
+        if let Some(date) = article.published_at {
+            html.push_str(&format!("Published: {}", date.format("%Y-%m-%d %H:%M:%S")));
+        }
+        
+        if let Some(author) = &article.author {
+            html.push_str(&format!(" | Author: {}", author));
+        }
+
+        html.push_str(r#"</div>
+    <div class="content">"#);
+
+        // Add content
+        if let Some(content) = &article.content {
+            html.push_str(content);
+        } else if let Some(summary) = &article.summary {
+            html.push_str(summary);
+        } else {
+            html.push_str("No content available.");
+        }
+
+        html.push_str(r#"</div>
+</body>
+</html>"#);
+
+        html
+    }
 }

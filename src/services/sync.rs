@@ -1,9 +1,5 @@
-mod sync_service;
-
 use anyhow::Result;
 use std::sync::Arc;
-
-pub use sync_service::SyncService;
 
 pub struct SyncService {
     // Add necessary fields here
@@ -18,4 +14,4 @@ impl SyncService {
         // Implement sync logic here
         Ok(())
     }
-}
+} 

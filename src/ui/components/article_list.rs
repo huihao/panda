@@ -1,149 +1,88 @@
 use std::sync::Arc;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use egui::{Ui, ScrollArea, RichText, Label, Vec2};
+use egui::{Ui, ScrollArea, RichText, Label, Vec2, Color32};
+use log::error;
 
-use crate::core::ArticleRepository;
-use crate::models::{Article, ArticleId, ReadStatus};
+use crate::base::repository::ArticleRepository;
+use crate::models::article::{Article, ArticleId, ReadStatus, CategoryId, FeedId, Tag};
 use crate::ui::styles::{AppColors, DEFAULT_PADDING, DEFAULT_SPACING};
+use crate::core::repository::ArticleRepository as CoreArticleRepository;
+use crate::services::RssService;
 
 /// Article sort order
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ArticleSortOrder {
-    NewestFirst,
-    OldestFirst,
+    DateDesc,
+    DateAsc,
+    TitleAsc,
+    TitleDesc,
 }
 
 /// Component for displaying a list of articles
 pub struct ArticleList {
     article_repository: Arc<dyn ArticleRepository>,
+    rss_service: Arc<RssService>,
     colors: AppColors,
     selected_article: Option<ArticleId>,
-    pub sort_order: ArticleSortOrder,
+    articles: Vec<Article>,
+    sort_order: ArticleSortOrder,
     scroll_to_index: Option<usize>,
+    sort_by_date: bool,
 }
 
 impl ArticleList {
     /// Creates a new article list
-    pub fn new(article_repository: Arc<dyn ArticleRepository>) -> Self {
+    pub fn new(
+        article_repository: Arc<dyn ArticleRepository>,
+        rss_service: Arc<RssService>,
+        colors: AppColors,
+    ) -> Self {
         Self {
             article_repository,
-            colors: AppColors::default(),
+            rss_service,
+            colors,
             selected_article: None,
-            sort_order: ArticleSortOrder::NewestFirst,
+            articles: Vec::new(),
+            sort_order: ArticleSortOrder::DateDesc,
             scroll_to_index: None,
+            sort_by_date: true,
         }
     }
     
     /// Renders the article list UI
-    pub fn ui(&mut self, ui: &mut Ui, articles: &[Article]) -> Result<Option<ArticleId>> {
+    pub fn show(&mut self, ui: &mut Ui) -> Result<Option<ArticleId>> {
         let mut selected = None;
-        
-        ScrollArea::vertical()
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                // Sort articles by date
-                let mut sorted_articles = articles.to_vec();
-                sorted_articles.sort_by(|a, b| {
-                    let time_a = a.published_date.unwrap_or_else(|| a.saved_date);
-                    let time_b = b.published_date.unwrap_or_else(|| b.saved_date);
-                    match self.sort_order {
-                        ArticleSortOrder::NewestFirst => time_b.cmp(&time_a),
-                        ArticleSortOrder::OldestFirst => time_a.cmp(&time_b),
-                    }
-                });
-                
-                // Display articles
-                for (index, article) in sorted_articles.iter().enumerate() {
-                    let is_selected = self.selected_article.as_ref() == Some(&article.id);
-                    let is_read = matches!(article.read_status, ReadStatus::Read);
-                    
-                    let height = if is_selected { 100.0 } else { 80.0 };
-                    
-                    // Article card
-                    ui.add_space(DEFAULT_SPACING);
-                    egui::Frame::none()
-                        .fill(if is_selected {
-                            self.colors.foreground
-                        } else {
-                            self.colors.background
-                        })
-                        .rounding(4.0)
-                        .show(ui, |ui| {
-                            ui.allocate_space(Vec2::new(ui.available_width(), height));
-                            
-                            // Article header
-                            ui.horizontal(|ui| {
-                                // Favorite indicator
-                                if article.is_favorite {
-                                    ui.add(Label::new(
-                                        RichText::new("★")
-                                            .color(self.colors.warning)
-                                            .size(16.0)
-                                    ));
-                                }
-                                
-                                // Article title
-                                let title_text = RichText::new(&article.title)
-                                    .size(14.0)
-                                    .color(if is_read {
-                                        self.colors.text_dimmed
-                                    } else {
-                                        self.colors.text
-                                    });
-                                
-                                ui.add(Label::new(title_text));
-                            });
-                            
-                            // Article metadata
-                            ui.horizontal(|ui| {
-                                // Published date
-                                if let Some(date) = article.published_date {
-                                    ui.add(Label::new(
-                                        RichText::new(format_date(date))
-                                            .size(12.0)
-                                            .color(self.colors.text_dimmed)
-                                    ));
-                                }
-                                
-                                ui.add(Label::new(" • "));
-                                
-                                // Author
-                                if let Some(author) = &article.author {
-                                    ui.add(Label::new(
-                                        RichText::new(author)
-                                            .size(12.0)
-                                            .color(self.colors.text_dimmed)
-                                    ));
-                                }
-                            });
-                            
-                            // Article summary (only for selected item)
-                            if is_selected {
-                                if let Some(summary) = &article.summary {
-                                    ui.add(Label::new(
-                                        RichText::new(truncate_text(summary, 150))
-                                            .size(12.0)
-                                            .color(self.colors.text_dimmed)
-                                    ));
-                                }
-                            }
-                            
-                            // Make entire area clickable
-                            if ui.interact(ui.min_rect(), ui.id(), egui::Sense::click()).clicked() {
-                                self.selected_article = Some(article.id.clone());
-                                selected = Some(article.id.clone());
-                            }
-                        });
-                }
+
+        ui.vertical(|ui| {
+            // Sort buttons
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Sort by:").color(self.colors.text));
+                ui.radio_value(&mut self.sort_order, ArticleSortOrder::DateDesc, "Newest");
+                ui.radio_value(&mut self.sort_order, ArticleSortOrder::DateAsc, "Oldest");
+                ui.radio_value(&mut self.sort_order, ArticleSortOrder::TitleAsc, "Title (A-Z)");
+                ui.radio_value(&mut self.sort_order, ArticleSortOrder::TitleDesc, "Title (Z-A)");
             });
-        
+
+            // Article list
+            for article in &self.articles {
+                let is_selected = self.selected_article.as_ref() == Some(&article.id);
+                let text_color = if is_selected {
+                    self.colors.accent
+                } else if article.read_status == "Unread" {
+                    self.colors.text
+                } else {
+                    self.colors.text_secondary
+                };
+
+                if ui.button(RichText::new(&article.title).color(text_color)).clicked() {
+                    self.selected_article = Some(article.id.clone());
+                    selected = Some(article.id.clone());
+                }
+            }
+        });
+
         Ok(selected)
-    }
-    
-    /// Sets the selected article
-    pub fn set_selected_article(&mut self, article_id: Option<ArticleId>) {
-        self.selected_article = article_id;
     }
     
     /// Gets all articles
@@ -168,9 +107,65 @@ impl ArticleList {
     
     /// Refreshes the article list
     pub fn refresh(&mut self) -> Result<()> {
-        // Clear selection
-        self.selected_article = None;
+        self.articles = self.article_repository.get_all_articles()?;
+        if self.sort_by_date {
+            self.articles.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+        } else {
+            self.articles.sort_by(|a, b| a.title.cmp(&b.title));
+        }
         Ok(())
+    }
+
+    pub fn get_selected_article(&self) -> Option<&Article> {
+        self.selected_article.as_ref().and_then(|id| {
+            self.articles.iter().find(|a| a.id == *id)
+        })
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selected_article = None;
+    }
+
+    pub fn set_sort_by_date(&mut self, sort_by_date: bool) -> Result<()> {
+        self.sort_by_date = sort_by_date;
+        self.refresh()
+    }
+
+    pub fn filter_by_tag(&mut self, tag: &Tag) -> Result<()> {
+        self.articles = self.article_repository.get_articles_by_tag(&tag.id)?;
+        if self.sort_by_date {
+            self.articles.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+        } else {
+            self.articles.sort_by(|a, b| a.title.cmp(&b.title));
+        }
+        Ok(())
+    }
+
+    pub fn set_articles(&mut self, articles: Vec<Article>) {
+        self.articles = articles;
+        self.sort_articles();
+    }
+
+    pub fn sort_articles(&mut self) {
+        match self.sort_order {
+            ArticleSortOrder::DateDesc => {
+                self.articles.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+            }
+            ArticleSortOrder::DateAsc => {
+                self.articles.sort_by(|a, b| a.published_at.cmp(&b.published_at));
+            }
+            ArticleSortOrder::TitleAsc => {
+                self.articles.sort_by(|a, b| a.title.cmp(&b.title));
+            }
+            ArticleSortOrder::TitleDesc => {
+                self.articles.sort_by(|a, b| b.title.cmp(&a.title));
+            }
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.articles.clear();
+        self.selected_article = None;
     }
 }
 

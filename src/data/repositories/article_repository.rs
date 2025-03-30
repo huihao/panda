@@ -56,55 +56,60 @@ impl ToSql for UrlWrapper {
 
 /// SQLite-based article repository implementation
 pub struct SqliteArticleRepository {
-    pool: Pool<SqliteConnectionManager>,
+    pool: Arc<Pool<SqliteConnectionManager>>,
 }
 
 impl SqliteArticleRepository {
     /// Creates a new SQLite article repository
-    pub fn new(pool: Pool<SqliteConnectionManager>) -> Self {
+    pub fn new(pool: Arc<Pool<SqliteConnectionManager>>) -> Self {
         Self { pool }
     }
 
     /// Maps a database row to an Article
-    fn map_row(&self, row: &Row) -> Result<Article, rusqlite::Error> {
+    fn map_row(row: &Row) -> Result<Article> {
         let id: String = row.get(0)?;
         let feed_id: String = row.get(1)?;
-        let title: String = row.get(2)?;
-        let url: String = row.get(3)?;
-        let author: Option<String> = row.get(4)?;
-        let content: String = row.get(5)?;
-        let summary: Option<String> = row.get(6)?;
-        let published_at: i64 = row.get(7)?;
-        let read_status: bool = row.get(8)?;
-        let is_favorite: bool = row.get(9)?;
-        let created_at: i64 = row.get(10)?;
-        let updated_at: i64 = row.get(11)?;
-        let thumbnail_url: Option<String> = row.get(12)?;
+        let category_id: Option<String> = row.get(2)?;
+        let title: String = row.get(3)?;
+        let url: String = row.get(4)?;
+        let author: Option<String> = row.get(5)?;
+        let content: Option<String> = row.get(6)?;
+        let summary: Option<String> = row.get(7)?;
+        let published_at: Option<String> = row.get(8)?;
+        let read_status: String = row.get(9)?;
+        let is_favorited: bool = row.get(10)?;
+        let created_at: String = row.get(11)?;
+        let updated_at: String = row.get(12)?;
+
+        let published_at = published_at
+            .map(|dt| DateTime::parse_from_rfc3339(&dt))
+            .transpose()?
+            .map(|dt| dt.with_timezone(&Utc));
+
+        let read_status = match read_status.as_str() {
+            "unread" => ReadStatus::Unread,
+            "read" => ReadStatus::Read,
+            "archived" => ReadStatus::Archived,
+            _ => ReadStatus::Unread,
+        };
+
+        let created_at = DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc);
+        let updated_at = DateTime::parse_from_rfc3339(&updated_at)?.with_timezone(&Utc);
 
         Ok(Article {
             id: ArticleId(id),
-            feed_id,
+            feed_id: FeedId(feed_id),
+            category_id: category_id.map(CategoryId),
             title,
-            url: url.parse().unwrap(),
+            url: Url::parse(&url)?,
             author,
             content,
             summary,
-            published_at: DateTime::from_utc(
-                chrono::NaiveDateTime::from_timestamp(published_at, 0),
-                Utc,
-            ),
+            published_at,
             read_status,
-            is_favorite,
-            created_at: DateTime::from_utc(
-                chrono::NaiveDateTime::from_timestamp(created_at, 0),
-                Utc,
-            ),
-            updated_at: DateTime::from_utc(
-                chrono::NaiveDateTime::from_timestamp(updated_at, 0),
-                Utc,
-            ),
-            tags: Default::default(),
-            thumbnail_url: thumbnail_url.map(|u| u.parse().unwrap()),
+            is_favorited,
+            created_at,
+            updated_at,
         })
     }
 
@@ -147,74 +152,87 @@ impl SqliteArticleRepository {
 }
 
 impl ArticleRepository for SqliteArticleRepository {
-    fn create_article(&self, article: &Article) -> Result<ArticleId> {
+    fn save_article(&self, article: &Article) -> Result<()> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
-            "INSERT INTO articles (id, feed_id, title, url, author, content, summary, published_at, read_status, is_favorite, created_at, updated_at, thumbnail_url) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT OR REPLACE INTO articles (id, feed_id, category_id, title, url, author, content, summary, published_at, read_status, is_favorited, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )?;
 
         stmt.execute(params![
             article.id.0,
-            article.feed_id,
+            article.feed_id.0,
+            article.category_id.as_ref().map(|id| id.0.clone()),
             article.title,
             article.url.to_string(),
             article.author,
             article.content,
             article.summary,
-            article.published_at.timestamp(),
-            article.read_status,
-            article.is_favorite,
-            article.created_at.timestamp(),
-            article.updated_at.timestamp(),
-            article.thumbnail_url.as_ref().map(|u| u.to_string()),
+            article.published_at.map(|dt| dt.to_rfc3339()),
+            article.read_status.to_string(),
+            article.is_favorited,
+            article.created_at.to_rfc3339(),
+            article.updated_at.to_rfc3339(),
         ])?;
 
-        Ok(article.id.clone())
+        Ok(())
     }
 
-    fn get_article(&self, id: &ArticleId) -> Result<Option<Article>> {
+    fn get_article_by_id(&self, id: &ArticleId) -> Result<Option<Article>> {
         let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("SELECT * FROM articles WHERE id = ?")?;
-        let article = stmt
-            .query_row([&id.0], |row| self.map_row(row))
-            .optional()?;
-        Ok(article)
+        let mut stmt = conn.prepare(
+            "SELECT id, feed_id, category_id, title, url, author, content, summary, published_at, read_status, is_favorited, created_at, updated_at FROM articles WHERE id = ?"
+        )?;
+
+        let mut rows = stmt.query(params![id.0])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(Self::map_row(row)?))
+        } else {
+            Ok(None)
+        }
     }
 
-    fn get_article_by_url(&self, url: &str) -> Result<Option<Article>> {
+    fn get_articles_by_feed(&self, feed_id: &FeedId) -> Result<Vec<Article>> {
         let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("SELECT * FROM articles WHERE url = ?")?;
-        let article = stmt.query_row([url], |row| self.map_row(row)).optional()?;
-        Ok(article)
-    }
+        let mut stmt = conn.prepare(
+            "SELECT id, feed_id, category_id, title, url, author, content, summary, published_at, read_status, is_favorited, created_at, updated_at FROM articles WHERE feed_id = ?"
+        )?;
 
-    fn get_articles_by_feed(&self, feed_id: &str) -> Result<Vec<Article>> {
-        let conn = self.pool.get()?;
-        let mut stmt =
-            conn.prepare("SELECT * FROM articles WHERE feed_id = ? ORDER BY published_at DESC")?;
-        let articles = stmt
-            .query_map([feed_id], |row| self.map_row(row))?
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut articles = Vec::new();
+        let mut rows = stmt.query(params![feed_id.0])?;
+        while let Some(row) = rows.next()? {
+            articles.push(Self::map_row(row)?);
+        }
+
         Ok(articles)
     }
 
-    fn get_all_articles(&self) -> Result<Vec<Article>> {
+    fn get_favorited_articles(&self) -> Result<Vec<Article>> {
         let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("SELECT * FROM articles ORDER BY published_at DESC")?;
-        let articles = stmt
-            .query_map([], |row| self.map_row(row))?
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, feed_id, category_id, title, url, author, content, summary, published_at, read_status, is_favorited, created_at, updated_at FROM articles WHERE is_favorited = 1"
+        )?;
+
+        let mut articles = Vec::new();
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            articles.push(Self::map_row(row)?);
+        }
+
         Ok(articles)
     }
 
     fn get_unread_articles(&self) -> Result<Vec<Article>> {
         let conn = self.pool.get()?;
-        let mut stmt = conn
-            .prepare("SELECT * FROM articles WHERE read_status = 0 ORDER BY published_at DESC")?;
-        let articles = stmt
-            .query_map([], |row| self.map_row(row))?
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, feed_id, category_id, title, url, author, content, summary, published_at, read_status, is_favorited, created_at, updated_at FROM articles WHERE read_status = 'unread'"
+        )?;
+
+        let mut articles = Vec::new();
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            articles.push(Self::map_row(row)?);
+        }
+
         Ok(articles)
     }
 
@@ -225,7 +243,7 @@ impl ArticleRepository for SqliteArticleRepository {
         )?;
 
         let articles = stmt
-            .query_map(params![DateTimeWrapper(date)], |row| self.map_row(row))?
+            .query_map(params![DateTimeWrapper(date)], |row| Self::map_row(row))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(articles)
     }
@@ -235,22 +253,22 @@ impl ArticleRepository for SqliteArticleRepository {
         let mut stmt = conn.prepare(
             "UPDATE articles SET 
              feed_id = ?, title = ?, url = ?, author = ?, content = ?, summary = ?, 
-             published_at = ?, read_status = ?, is_favorite = ?, updated_at = ?, thumbnail_url = ?
+             published_at = ?, read_status = ?, is_favorite = ?, saved_at = ?, category_id = ?
              WHERE id = ?",
         )?;
 
         stmt.execute(params![
-            article.feed_id,
+            article.feed_id.0,
             article.title,
             article.url.to_string(),
             article.author,
             article.content,
             article.summary,
-            article.published_at.timestamp(),
-            article.read_status,
-            article.is_favorite,
-            article.updated_at.timestamp(),
-            article.thumbnail_url.as_ref().map(|u| u.to_string()),
+            article.published_at.map(|dt| dt.to_rfc3339()),
+            article.read_status.to_string(),
+            article.is_favorited,
+            article.updated_at.to_rfc3339(),
+            article.category_id.as_ref().map(|id| id.0.clone()),
             article.id.0,
         ])?;
 
@@ -266,93 +284,67 @@ impl ArticleRepository for SqliteArticleRepository {
 
     fn add_tags(&self, article_id: ArticleId, tags: &[String]) -> Result<()> {
         let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("INSERT INTO article_tags (article_id, tag) VALUES (?, ?)")?;
-
+        let mut stmt = conn.prepare("INSERT INTO article_tags (article_id, tag_id) VALUES (?, ?)")?;
         for tag in tags {
             stmt.execute(params![article_id.0, tag])?;
         }
-
         Ok(())
     }
 
     fn get_article_tags(&self, article_id: ArticleId) -> Result<Vec<String>> {
         let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("SELECT tag FROM article_tags WHERE article_id = ?")?;
-
+        let mut stmt = conn.prepare(
+            "SELECT t.name FROM tags t
+             JOIN article_tags at ON t.id = at.tag_id
+             WHERE at.article_id = ?",
+        )?;
         let tags = stmt
-            .query_map(params![article_id.0], |row| row.get(0))?
+            .query_map([article_id.0], |row| row.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(tags)
     }
 
     fn add_tag(&self, article_id: ArticleId, tag_id: &str) -> Result<()> {
         let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("INSERT INTO article_tags (article_id, tag) VALUES (?, ?)")?;
-
+        let mut stmt = conn.prepare("INSERT INTO article_tags (article_id, tag_id) VALUES (?, ?)")?;
         stmt.execute(params![article_id.0, tag_id])?;
         Ok(())
     }
 
     fn remove_tag(&self, article_id: ArticleId, tag_id: &str) -> Result<()> {
         let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("DELETE FROM article_tags WHERE article_id = ? AND tag = ?")?;
-
+        let mut stmt = conn.prepare("DELETE FROM article_tags WHERE article_id = ? AND tag_id = ?")?;
         stmt.execute(params![article_id.0, tag_id])?;
         Ok(())
     }
 
-    fn get_favorite_articles(&self) -> Result<Vec<Article>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn
-            .prepare("SELECT * FROM articles WHERE is_favorite = 1 ORDER BY published_at DESC")?;
-        let articles = stmt
-            .query_map([], |row| self.map_row(row))?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(articles)
-    }
-
     fn search_articles(&self, query: &str) -> Result<Vec<Article>> {
         let conn = self.pool.get()?;
-        let search_pattern = format!("%{}%", query);
         let mut stmt = conn.prepare(
             "SELECT * FROM articles 
-             WHERE title LIKE ? 
-             OR content LIKE ? 
-             OR summary LIKE ? 
-             OR author LIKE ?
+             WHERE title LIKE ? OR content LIKE ? OR summary LIKE ?
              ORDER BY published_at DESC",
         )?;
 
+        let pattern = format!("%{}%", query);
         let articles = stmt
-            .query_map(
-                params![
-                    &search_pattern,
-                    &search_pattern,
-                    &search_pattern,
-                    &search_pattern
-                ],
-                |row| self.map_row(row),
-            )?
+            .query_map(params![pattern, pattern, pattern], |row| Self::map_row(row))?
             .collect::<Result<Vec<_>, _>>()?;
-
         Ok(articles)
     }
 
     fn cleanup_old_articles(&self, retention_days: i64) -> Result<usize> {
         let conn = self.pool.get()?;
-        let cutoff_timestamp = Utc::now()
-            .checked_sub_signed(chrono::Duration::days(retention_days))
-            .ok_or_else(|| anyhow::anyhow!("Invalid retention period"))?
-            .timestamp();
-
         let mut stmt = conn.prepare(
             "DELETE FROM articles 
-             WHERE published_at < ? 
-             AND is_favorite = 0",
+             WHERE published_at < datetime('now', ?) 
+             AND read_status != 'archived'
+             AND is_favorited = 0",
         )?;
 
-        let affected_rows = stmt.execute([cutoff_timestamp])?;
-        Ok(affected_rows)
+        let days_pattern = format!("-{} days", retention_days);
+        let count = stmt.execute([days_pattern])?;
+        Ok(count)
     }
 }
 

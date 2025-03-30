@@ -1,186 +1,238 @@
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use feed_rs::parser;
+use log::{error, info};
 use url::Url;
 use uuid::Uuid;
 use std::sync::Arc;
+use reqwest::Client;
+use feed_rs::model::Feed as FeedRs;
 
 use crate::models::article::{Article, ArticleId, ReadStatus};
 use crate::models::feed::{Feed, FeedId, FeedStatus};
 use crate::data::{ArticleRepository, FeedRepository};
+use crate::base::repository::{CategoryRepository, TagRepository};
+use crate::models::category::{Category, CategoryId};
+use crate::models::tag::{Tag, TagId};
 
+/// Service for managing RSS feeds
 pub struct RssService {
-    feed_repository: Arc<dyn FeedRepository>,
     article_repository: Arc<dyn ArticleRepository>,
+    feed_repository: Arc<dyn FeedRepository>,
+    category_repository: Arc<dyn CategoryRepository>,
+    tag_repository: Arc<dyn TagRepository>,
+    client: Client,
 }
 
 impl RssService {
+    /// Creates a new RSS service
     pub fn new(
-        feed_repository: Arc<dyn FeedRepository>,
         article_repository: Arc<dyn ArticleRepository>,
+        feed_repository: Arc<dyn FeedRepository>,
+        category_repository: Arc<dyn CategoryRepository>,
+        tag_repository: Arc<dyn TagRepository>,
     ) -> Self {
         Self {
-            feed_repository,
             article_repository,
+            feed_repository,
+            category_repository,
+            tag_repository,
+            client: Client::new(),
         }
     }
 
-    /// Fetches all feeds and updates articles database
-    /// 
-    /// This method retrieves all registered feeds from the repository
-    /// and fetches new articles from each one, storing them in the database.
-    /// If fetching a particular feed fails, it will log the error and continue
-    /// with the next feed to ensure maximum resilience.
+    /// Fetches all feeds
     pub async fn fetch_all_feeds(&self) -> Result<()> {
         let feeds = self.feed_repository.get_all_feeds()?;
-        let mut success_count = 0;
-        let mut error_count = 0;
-        
         for feed in feeds {
-            match self.update_feed(&feed.id).await {
-                Ok(_) => {
-                    success_count += 1;
-                }
-                Err(e) => {
-                    error_count += 1;
-                    log::error!("Failed to update feed {}: {}", feed.url, e);
-                    // Continue with next feed instead of aborting
-                }
+            if let Err(e) = self.fetch_feed(&feed.id).await {
+                log::error!("Failed to fetch feed {}: {}", feed.title, e);
             }
         }
-        
-        log::info!("Feed update complete: {} successful, {} failed", success_count, error_count);
-        
-        if error_count > 0 && success_count == 0 {
-            return Err(anyhow!("All feed updates failed"));
-        }
-        
         Ok(())
     }
 
-    pub async fn fetch_feed(&self, feed: &Feed) -> Result<Vec<Article>> {
-        let response = reqwest::get(feed.url.clone()).await?;
-        let content = response.bytes().await?;
-        let parsed = parser::parse(&content[..])?;
+    /// Fetches and parses a feed
+    pub async fn fetch_feed(&self, feed_id: &FeedId) -> Result<()> {
+        let feed = self.feed_repository.get_feed_by_id(feed_id)?
+            .ok_or_else(|| anyhow::anyhow!("Feed not found"))?;
 
-        let mut articles = Vec::new();
-        for entry in parsed.entries {
-            let id = ArticleId(Uuid::new_v4().to_string());
-            
-            let article = Article {
-                id,
-                feed_id: feed.id.0.clone(),
-                title: entry.title.map(|t| t.content).unwrap_or_default(),
-                url: entry.links.first()
-                    .ok_or_else(|| anyhow!("Article has no URL"))?
-                    .href.parse()?,
-                author: entry.authors.first().map(|a| a.name.clone()),
-                content: entry.content.and_then(|c| c.body).unwrap_or_default(),
-                summary: entry.summary.map(|s| s.content),
-                published_at: entry.published.or(entry.updated)
-                    .ok_or_else(|| anyhow!("Article has no date"))?
-                    .with_timezone(&Utc),
-                read_status: false,
-                is_favorite: false,
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-                thumbnail_url: entry.media.first()
-                    .and_then(|m| m.thumbnails.first())
-                    .and_then(|t| t.image.uri.parse().ok()),
-                tags: Vec::new(),
-            };
+        let response = reqwest::get(feed.url.as_str()).await?;
+        let content = response.text().await?;
+        let feed_data = parser::parse(content.as_bytes())?;
 
-            articles.push(article);
+        let mut article = Article::new(
+            feed.id.clone(),
+            feed_data.title.map(|t| t.content).unwrap_or_default(),
+            feed.url.clone(),
+        );
+
+        if let Some(author) = feed_data.authors.first() {
+            article = article.with_author(author.name.clone());
         }
 
-        Ok(articles)
+        if let Some(entry) = feed_data.entries.first() {
+            if let Some(content) = entry.content.first() {
+                article = article.with_content(content.body.clone());
+            }
+            if let Some(summary) = &entry.summary {
+                article = article.with_summary(summary.content.clone());
+            }
+            if let Some(published) = entry.published {
+                article = article.with_published_at(published);
+            }
+        }
+
+        self.article_repository.save_article(&article)?;
+        
+        let mut updated_feed = feed.clone();
+        updated_feed.update_fetch_times(Utc::now(), Utc::now() + chrono::Duration::hours(1));
+        self.feed_repository.update_feed(&updated_feed)?;
+
+        Ok(())
     }
 
-    pub async fn add_feed(&self, feed_url: Url) -> Result<FeedId> {
-        // Check if feed already exists
-        if let Some(existing_feed) = self.feed_repository.get_feed_by_url(feed_url.as_str())? {
-            return Ok(existing_feed.id);
-        }
+    /// Adds a new feed
+    pub async fn add_feed(&self, url: &str) -> Result<()> {
+        let url = Url::parse(url)?;
+        let response = reqwest::get(url.as_str()).await?;
+        let content = response.text().await?;
+        let feed_data = parser::parse(content.as_bytes())?;
 
-        // Fetch and parse the feed
-        let response = reqwest::get(feed_url.clone()).await?;
-        let content = response.bytes().await?;
-        let parsed = parser::parse(&content[..])?;
-
-        let now = Utc::now();
-        let feed = Feed {
-            id: FeedId(Uuid::new_v4().to_string()),
-            url: feed_url,
-            title: parsed.title.map(|t| t.content).unwrap_or_else(|| "Untitled Feed".to_string()),
-            description: parsed.description.map(|d| d.content),
-            icon_url: parsed.icon.and_then(|i| i.uri.parse().ok()),
-            category_id: None,
-            status: FeedStatus::Active,
-            error_message: None,
-            last_fetch: Some(now),
-            next_fetch: Some(now),
-            update_interval: Some(3600), // Default to 1 hour
-            created_at: now,
-            updated_at: now,
-        };
+        let feed = Feed::new(
+            feed_data.title.map(|t| t.content).unwrap_or_default(),
+            url,
+        );
 
         self.feed_repository.save_feed(&feed)?;
-
-        // Add initial articles
-        for entry in parsed.entries {
-            let url: Url = entry.links.first()
-                .ok_or_else(|| anyhow!("Article has no URL"))?
-                .href.parse()?;
-
-            // Skip if article already exists
-            if self.article_repository.get_article_by_url(url.as_str())?.is_some() {
-                continue;
-            }
-
-            let article = Article {
-                id: ArticleId(Uuid::new_v4().to_string()),
-                feed_id: feed.id.0.clone(),
-                title: entry.title.map(|t| t.content).unwrap_or_default(),
-                url,
-                author: entry.authors.first().map(|a| a.name.clone()),
-                content: entry.content.and_then(|c| c.body).unwrap_or_default(),
-                summary: entry.summary.map(|s| s.content),
-                published_at: entry.published.or(entry.updated)
-                    .ok_or_else(|| anyhow!("Article has no date"))?
-                    .with_timezone(&Utc),
-                read_status: false,
-                is_favorite: false,
-                created_at: now,
-                updated_at: now,
-                thumbnail_url: entry.media.first()
-                    .and_then(|m| m.thumbnails.first())
-                    .and_then(|t| t.image.uri.parse().ok()),
-                tags: Vec::new(),
-            };
-
-            self.article_repository.create_article(&article)?;
-        }
-
-        Ok(feed.id)
+        Ok(())
     }
 
-    pub async fn update_feed(&self, feed_id: &FeedId) -> Result<()> {
-        let mut feed = self.feed_repository.get_feed_by_id(feed_id)?
-            .ok_or_else(|| anyhow!("Feed not found"))?;
+    /// Updates an existing feed
+    pub async fn update_feed(&self, feed: &Feed) -> Result<()> {
+        self.feed_repository.save_feed(feed)?;
+        Ok(())
+    }
 
-        let articles = self.fetch_feed(&feed).await?;
-        for article in articles {
-            if self.article_repository.get_article_by_url(article.url.as_str())?.is_none() {
-                self.article_repository.create_article(&article)?;
+    /// Fetches new articles for all feeds that need to be updated
+    pub async fn sync_all(&self) -> Result<()> {
+        let feeds = self.feed_repository.get_feeds_to_update()?;
+        
+        for feed in feeds {
+            match self.update_feed(&feed).await {
+                Ok(_) => {
+                    info!("Successfully updated feed: {}", feed.title);
+                }
+                Err(e) => {
+                    error!("Failed to update feed {}: {}", feed.title, e);
+                    let mut failed_feed = feed.clone();
+                    failed_feed.update_status(FeedStatus::Error);
+                    failed_feed.update_error_message(e.to_string());
+                    failed_feed.update_fetch_times(Utc::now(), Utc::now() + chrono::Duration::hours(1));
+                    self.feed_repository.update_feed(&failed_feed)?;
+                }
             }
         }
-
-        let now = Utc::now();
-        feed.last_fetch = Some(now);
-        feed.next_fetch = Some(now + chrono::Duration::hours(1));
-        feed.updated_at = now;
-
-        self.feed_repository.update_feed(&feed)?;
+        
         Ok(())
+    }
+
+    /// Gets all feeds in the repository
+    pub async fn get_all_feeds(&self) -> Result<Vec<Feed>> {
+        Ok(self.feed_repository.get_all_feeds()?)
+    }
+
+    /// Gets all feeds in a category
+    pub async fn get_feeds_by_category(&self, category_id: &CategoryId) -> Result<Vec<Feed>> {
+        Ok(self.feed_repository.get_feeds_by_category(category_id)?)
+    }
+
+    /// Gets all categories in the repository
+    pub async fn get_all_categories(&self) -> Result<Vec<Category>> {
+        Ok(self.category_repository.get_all_categories()?)
+    }
+
+    /// Gets all articles in a feed
+    pub async fn get_articles_by_feed(&self, feed_id: &FeedId) -> Result<Vec<Article>> {
+        Ok(self.article_repository.get_articles_by_feed(feed_id)?)
+    }
+
+    /// Gets all articles in a category
+    pub async fn fetch_articles_by_category(&self, category_id: &CategoryId) -> Result<Vec<Article>> {
+        self.article_repository.get_articles_by_category(category_id)
+    }
+
+    /// Gets all unread articles
+    pub async fn get_unread_articles(&self) -> Result<Vec<Article>> {
+        Ok(self.article_repository.get_unread_articles()?)
+    }
+
+    /// Gets all favorited articles
+    pub async fn get_favorite_articles(&self) -> Result<Vec<Article>> {
+        Ok(self.article_repository.get_favorite_articles()?)
+    }
+
+    /// Searches for articles by title or content
+    pub async fn search_articles(&self, query: &str) -> Result<Vec<Article>> {
+        self.article_repository.search_articles(query)
+    }
+
+    /// Gets articles by date range
+    pub async fn fetch_articles_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Article>> {
+        self.article_repository.get_articles_by_date_range(start, end)
+    }
+
+    /// Deletes a feed and all its articles
+    pub async fn delete_feed(&self, feed_id: &FeedId) -> Result<()> {
+        self.feed_repository.delete_feed(feed_id)?;
+        Ok(())
+    }
+
+    pub async fn get_feed_by_id(&self, feed_id: &FeedId) -> Result<Option<Feed>> {
+        Ok(self.feed_repository.get_feed_by_id(feed_id)?)
+    }
+
+    pub async fn get_article(&self, article_id: &ArticleId) -> Result<Option<Article>> {
+        Ok(self.article_repository.get_article(article_id)?)
+    }
+
+    pub async fn get_all_articles(&self) -> Result<Vec<Article>> {
+        Ok(self.article_repository.get_all_articles()?)
+    }
+
+    pub async fn get_category_by_id(&self, category_id: &CategoryId) -> Result<Option<Category>> {
+        Ok(self.category_repository.get_category_by_id(category_id)?)
+    }
+
+    pub async fn get_categories_by_parent(&self, parent_id: &CategoryId) -> Result<Vec<Category>> {
+        Ok(self.category_repository.get_categories_by_parent(parent_id)?)
+    }
+
+    pub async fn get_root_categories(&self) -> Result<Vec<Category>> {
+        Ok(self.category_repository.get_root_categories()?)
+    }
+
+    pub async fn get_child_categories(&self, parent_id: &CategoryId) -> Result<Vec<Category>> {
+        Ok(self.category_repository.get_child_categories(parent_id)?)
+    }
+
+    pub async fn search_categories(&self, name: &str) -> Result<Vec<Category>> {
+        Ok(self.category_repository.search_categories(name)?)
+    }
+
+    pub async fn get_recently_updated_categories(&self, limit: usize) -> Result<Vec<Category>> {
+        Ok(self.category_repository.get_recently_updated_categories(limit)?)
+    }
+
+    pub async fn save_category(&self, category: &Category) -> Result<()> {
+        Ok(self.category_repository.save_category(category)?)
+    }
+
+    pub async fn update_category(&self, category: &Category) -> Result<()> {
+        Ok(self.category_repository.update_category(category)?)
+    }
+
+    pub async fn delete_category(&self, category_id: &CategoryId) -> Result<()> {
+        Ok(self.category_repository.delete_category(category_id)?)
     }
 }
