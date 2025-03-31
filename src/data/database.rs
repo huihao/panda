@@ -205,22 +205,22 @@ impl Database {
     
     /// Gets the article repository instance
     pub fn get_article_repository(&self) -> Arc<dyn ArticleRepository> {
-        Arc::new(SqliteArticleRepository::new(self.pool.clone()))
+        Arc::new(SqliteArticleRepository::new(Arc::new(self.pool.clone())))
     }
     
     /// Gets the feed repository instance
     pub fn get_feed_repository(&self) -> Arc<dyn FeedRepository> {
-        Arc::new(SqliteFeedRepository::new(self.pool.clone()))
+        Arc::new(SqliteFeedRepository::new(Arc::new(self.pool.clone())))
     }
     
     /// Gets the category repository instance
     pub fn get_category_repository(&self) -> Arc<dyn CategoryRepository> {
-        Arc::new(SqliteCategoryRepository::new(self.pool.clone()))
+        Arc::new(SqliteCategoryRepository::new(Arc::new(self.pool.clone())))
     }
     
     /// Gets the tag repository instance
     pub fn get_tag_repository(&self) -> Arc<dyn TagRepository> {
-        Arc::new(SqliteTagRepository::new(self.pool.clone()))
+        Arc::new(SqliteTagRepository::new(Arc::new(self.pool.clone())))
     }
 }
 

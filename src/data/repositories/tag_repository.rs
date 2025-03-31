@@ -34,17 +34,18 @@ impl SqliteTagRepository {
 impl TagRepository for SqliteTagRepository {
     fn create_tag(&self, tag: &Tag) -> Result<()> {
         let conn = self.pool.get()?;
-        conn.execute(
-            "INSERT INTO tags (id, name, description, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                tag.id.0,
-                tag.name,
-                tag.description,
-                tag.created_at.to_rfc3339(),
-                tag.updated_at.to_rfc3339(),
-            ],
+        let mut stmt = conn.prepare(
+            "INSERT INTO tags (id, name, created_at, updated_at)
+             VALUES (?, ?, ?, ?)"
         )?;
+
+        stmt.execute([
+            &tag.id.to_string(),
+            &tag.name,
+            &Utc::now().to_rfc3339(),
+            &Utc::now().to_rfc3339(),
+        ])?;
+
         Ok(())
     }
 
@@ -62,15 +63,25 @@ impl TagRepository for SqliteTagRepository {
     fn get_all_tags(&self) -> Result<Vec<Tag>> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, created_at, updated_at
+            "SELECT id, name, created_at, updated_at
              FROM tags
-             ORDER BY name",
+             ORDER BY name ASC"
         )?;
-        let rows = stmt.query_map(params![], Self::map_row)?;
-        let mut tags = Vec::new();
-        for tag in rows {
-            tags.push(tag??);
-        }
+
+        let tags = stmt.query_map([], |row| {
+            Ok(Tag {
+                id: TagId::from_str(row.get::<_, String>(0)?).unwrap(),
+                name: row.get(1)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
         Ok(tags)
     }
 
@@ -92,17 +103,18 @@ impl TagRepository for SqliteTagRepository {
 
     fn update_tag(&self, tag: &Tag) -> Result<()> {
         let conn = self.pool.get()?;
-        conn.execute(
+        let mut stmt = conn.prepare(
             "UPDATE tags
-             SET name = ?1, description = ?2, updated_at = ?3
-             WHERE id = ?4",
-            params![
-                tag.name,
-                tag.description,
-                tag.updated_at.to_rfc3339(),
-                tag.id.0,
-            ],
+             SET name = ?, updated_at = ?
+             WHERE id = ?"
         )?;
+
+        stmt.execute([
+            &tag.name,
+            &Utc::now().to_rfc3339(),
+            &tag.id.to_string(),
+        ])?;
+
         Ok(())
     }
 
@@ -255,15 +267,26 @@ impl TagRepository for SqliteTagRepository {
     fn get_tag_by_name(&self, name: &str) -> Result<Option<Tag>> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, created_at, updated_at FROM tags WHERE name = ?"
+            "SELECT id, name, created_at, updated_at
+             FROM tags
+             WHERE name = ?"
         )?;
 
-        let mut rows = stmt.query(params![name])?;
-        if let Some(row) = rows.next()? {
-            Ok(Some(Self::map_row(row)?))
-        } else {
-            Ok(None)
-        }
+        let tag = stmt.query_row([name], |row| {
+            Ok(Tag {
+                id: TagId::from_str(row.get::<_, String>(0)?).unwrap(),
+                name: row.get(1)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+            })
+        })
+        .optional()?;
+
+        Ok(tag)
     }
 
     fn map_article_row(row: &Row) -> Result<Article> {
@@ -281,5 +304,105 @@ impl TagRepository for SqliteTagRepository {
             created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(10)?)?.with_timezone(&Utc),
             updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(11)?)?.with_timezone(&Utc),
         })
+    }
+
+    /// Gets tags count
+    pub fn get_tags_count(&self) -> Result<i64> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare("SELECT COUNT(*) FROM tags")?;
+        let count: i64 = stmt.query_row([], |row| row.get(0))?;
+        Ok(count)
+    }
+
+    /// Gets tags with articles count
+    pub fn get_tags_with_counts(&self) -> Result<Vec<(Tag, i64)>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT t.id, t.name, t.created_at, t.updated_at,
+                    COUNT(at.article_id) as articles_count
+             FROM tags t
+             LEFT JOIN article_tags at ON t.id = at.tag_id
+             GROUP BY t.id
+             ORDER BY t.name ASC"
+        )?;
+
+        let tags = stmt.query_map([], |row| {
+            Ok((
+                Tag {
+                    id: TagId::from_str(row.get::<_, String>(0)?).unwrap(),
+                    name: row.get(1)?,
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                        .map(|d| d.with_timezone(&Utc))
+                        .unwrap(),
+                    updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
+                        .map(|d| d.with_timezone(&Utc))
+                        .unwrap(),
+                },
+                row.get(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(tags)
+    }
+
+    /// Gets tags for an article
+    pub fn get_tags_for_article(&self, article_id: &ArticleId) -> Result<Vec<Tag>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT t.id, t.name, t.created_at, t.updated_at
+             FROM tags t
+             JOIN article_tags at ON t.id = at.tag_id
+             WHERE at.article_id = ?
+             ORDER BY t.name ASC"
+        )?;
+
+        let tags = stmt.query_map([article_id.to_string()], |row| {
+            Ok(Tag {
+                id: TagId::from_str(row.get::<_, String>(0)?).unwrap(),
+                name: row.get(1)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(tags)
+    }
+
+    /// Adds a tag to an article
+    pub fn add_tag_to_article(&self, article_id: &ArticleId, tag_id: &TagId) -> Result<()> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "INSERT INTO article_tags (article_id, tag_id)
+             VALUES (?, ?)"
+        )?;
+
+        stmt.execute([
+            article_id.to_string(),
+            tag_id.to_string(),
+        ])?;
+
+        Ok(())
+    }
+
+    /// Removes a tag from an article
+    pub fn remove_tag_from_article(&self, article_id: &ArticleId, tag_id: &TagId) -> Result<()> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "DELETE FROM article_tags
+             WHERE article_id = ? AND tag_id = ?"
+        )?;
+
+        stmt.execute([
+            article_id.to_string(),
+            tag_id.to_string(),
+        ])?;
+
+        Ok(())
     }
 }

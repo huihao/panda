@@ -1,14 +1,13 @@
 use std::path::Path;
 use anyhow::Result;
 use quick_xml::events::{Event, BytesStart, BytesEnd, BytesText};
-use crate::models::{feed::Feed, category::Category};
 use std::sync::Arc;
 use log::error;
 use url::Url;
 use opml::{Outline, OPML};
 use chrono::Utc;
 
-use crate::models::category::CategoryId;
+use crate::models::category::{Category, CategoryId};
 use crate::models::feed::{Feed, FeedId};
 use crate::services::rss::RssService;
 
@@ -109,4 +108,4 @@ impl OpmlService {
 
         Ok(opml.to_string())
     }
-} 
+}

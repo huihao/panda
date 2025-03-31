@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use egui::{Ui, SidePanel, CentralPanel, TopBottomPanel, Layout, RichText, menu, ScrollArea, Color32, Context};
+use egui::{Context, RichText, Color32, TopBottomPanel, Button};
 use anyhow::Result;
 use rfd::FileDialog;
 use log::{info, error};
@@ -7,8 +7,10 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::base::repository::{FeedRepository, CategoryRepository, ArticleRepository};
-use crate::models::{Article, Feed, Category, Tag};
-use crate::models::article::ArticleId;
+use crate::models::{Feed, Category, Tag};
+use crate::models::article::{Article, ArticleId};
+use crate::models::category::CategoryId;
+use crate::models::feed::FeedId;
 use crate::services::{RssService, WebViewService, SyncService, OpmlService};
 use crate::ui::components::{
     Sidebar, SidebarSelection,
@@ -18,14 +20,7 @@ use crate::ui::components::{
     CategoryManager,
     SettingsDialog,
 };
-use crate::ui::styles::{AppColors, DEFAULT_PADDING};
-use crate::ui::{
-    components::{sidebar::Sidebar, article_viewer::ArticleViewer},
-    context::Context,
-    theme::AppColors,
-};
-use crate::models::{article::Article, article::ArticleId, category::CategoryId};
-use egui::{Context as EguiContext, Ui};
+use crate::ui::styles::AppColors;
 
 /// Main view component that organizes the application layout
 pub struct MainView {
@@ -53,6 +48,8 @@ pub struct MainView {
     show_sync_indicator: bool,
     status_message: Option<(String, Instant)>,
     selected_article: Option<ArticleId>,
+    show_categories: bool,
+    show_settings: bool,
 }
 
 impl MainView {
@@ -89,44 +86,35 @@ impl MainView {
             show_sync_indicator: false,
             status_message: None,
             selected_article: None,
+            show_categories: false,
+            show_settings: false,
         }
     }
     
-    /// Renders the main view UI
-    pub async fn show(&mut self, ctx: &Context) -> Result<()> {
-        egui::SidePanel::left("sidebar")
-            .show(ctx, |ui| {
-                self.sidebar.show(ui);
-            });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(article_id) = self.selected_article {
-                if let Ok(Some(article)) = ctx.rss_service.get_article(&article_id).await {
-                    self.article_viewer.show(ui);
-                }
-            } else {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Select an article to view");
-                });
+    /// Shows the main view
+    pub async fn show(&mut self, ctx: &mut Context) -> Result<()> {
+        // Render sidebar and central panel
+        self.sidebar.show(ctx).await?;
+        
+        // Show selected article if any
+        if let Some(article_id) = self.selected_article {
+            if let Ok(Some(article)) = ctx.rss_service.get_article(&article_id).await {
+                self.article_viewer.show(&article)?;
             }
-        });
+        }
 
-        egui::TopBottomPanel::top("top_panel")
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.button("Categories").clicked() {
-                        self.category_manager.show(ui);
-                    }
-                    if ui.button("Settings").clicked() {
-                        self.settings_dialog.show(ui);
-                    }
-                    if ui.button("Sync All").clicked() {
-                        if let Err(e) = self.sync_all().await {
-                            log::error!("Error syncing feeds: {}", e);
-                        }
-                    }
-                });
-            });
+        // Show buttons
+        if Button::new("Categories").clicked() {
+            self.show_categories = true;
+        }
+        if Button::new("Settings").clicked() {
+            self.show_settings = true;
+        }
+        if Button::new("Sync All").clicked() {
+            if let Err(e) = self.sync_all().await {
+                log::error!("Failed to sync all feeds: {}", e);
+            }
+        }
 
         Ok(())
     }
@@ -139,7 +127,7 @@ impl MainView {
                 self.article_list.set_articles(articles);
             }
             "favorites" => {
-                let articles = self.rss_service.get_favorited_articles().await?;
+                let articles = self.rss_service.get_favorite_articles().await?;
                 self.article_list.set_articles(articles);
             }
             "unread" => {
@@ -168,8 +156,8 @@ impl MainView {
     }
     
     /// Handles article selection
-    fn handle_article_selection(&mut self, article_id: ArticleId) -> Result<()> {
-        if let Some(article) = self.rss_service.get_article(&article_id).await? {
+    async fn handle_article_selection(&mut self, article_id: ArticleId) -> Result<()> {
+        if let Ok(Some(article)) = self.rss_service.get_article(&article_id).await {
             self.article_viewer.set_article(article);
         }
         Ok(())
@@ -193,13 +181,10 @@ impl MainView {
         self.status_message = Some((message, Instant::now()));
     }
     
-    /// Synchronizes all feeds
-    pub async fn sync_all(&mut self) -> Result<()> {
-        self.show_sync_indicator = true;
-        self.rss_service.fetch_all_feeds().await?;
+    /// Syncs all feeds
+    async fn sync_all(&mut self) -> Result<()> {
+        self.rss_service.sync_all_feeds().await?;
         self.sidebar.refresh().await?;
-        self.set_status_message("Sync completed successfully".to_string());
-        self.show_sync_indicator = false;
         Ok(())
     }
     

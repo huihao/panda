@@ -53,7 +53,7 @@ impl RssService {
     }
 
     /// Fetches and parses a feed
-    pub async fn fetch_feed(&self, feed_id: &FeedId) -> Result<()> {
+    pub async fn fetch_feed(&self, feed_id: &FeedId) -> Result<Feed> {
         let feed = self.feed_repository.get_feed_by_id(feed_id)?
             .ok_or_else(|| anyhow::anyhow!("Feed not found"))?;
 
@@ -83,13 +83,13 @@ impl RssService {
             }
         }
 
-        self.article_repository.save_article(&article)?;
+        self.article_repository.create_article(&article)?;
         
         let mut updated_feed = feed.clone();
         updated_feed.update_fetch_times(Utc::now(), Utc::now() + chrono::Duration::hours(1));
         self.feed_repository.update_feed(&updated_feed)?;
 
-        Ok(())
+        Ok(updated_feed)
     }
 
     /// Adds a new feed
@@ -192,12 +192,14 @@ impl RssService {
         Ok(self.feed_repository.get_feed_by_id(feed_id)?)
     }
 
+    /// Gets an article by ID
     pub async fn get_article(&self, article_id: &ArticleId) -> Result<Option<Article>> {
-        Ok(self.article_repository.get_article(article_id)?)
+        self.article_repository.get_article(article_id)
     }
 
+    /// Gets all articles
     pub async fn get_all_articles(&self) -> Result<Vec<Article>> {
-        Ok(self.article_repository.get_all_articles()?)
+        self.article_repository.get_all_articles()
     }
 
     pub async fn get_category_by_id(&self, category_id: &CategoryId) -> Result<Option<Category>> {
@@ -234,5 +236,27 @@ impl RssService {
 
     pub async fn delete_category(&self, category_id: &CategoryId) -> Result<()> {
         Ok(self.category_repository.delete_category(category_id)?)
+    }
+
+    /// Gets articles by tag
+    pub async fn get_articles_by_tag(&self, tag_id: &TagId) -> Result<Vec<Article>> {
+        self.article_repository.get_articles_by_tag(tag_id)
+    }
+
+    /// Syncs a feed
+    pub async fn sync_feed(&self, feed_id: &FeedId) -> Result<()> {
+        self.fetch_feed(feed_id).await?;
+        Ok(())
+    }
+
+    /// Syncs all feeds
+    pub async fn sync_all_feeds(&self) -> Result<()> {
+        let feeds = self.feed_repository.get_feeds_to_fetch()?;
+        for feed in feeds {
+            if let Err(e) = self.sync_feed(&feed.id).await {
+                log::error!("Failed to sync feed {}: {}", feed.id, e);
+            }
+        }
+        Ok(())
     }
 }

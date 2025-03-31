@@ -264,4 +264,45 @@ impl CategoryRepository for SqliteCategoryRepository {
         ])?;
         Ok(())
     }
+
+    /// Gets categories count
+    pub fn get_categories_count(&self) -> Result<i64> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare("SELECT COUNT(*) FROM categories")?;
+        let count: i64 = stmt.query_row([], |row| row.get(0))?;
+        Ok(count)
+    }
+
+    /// Gets categories with feeds count
+    pub fn get_categories_with_counts(&self) -> Result<Vec<(Category, i64)>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.name, c.description, c.created_at, c.updated_at,
+                    COUNT(f.id) as feeds_count
+             FROM categories c
+             LEFT JOIN feeds f ON c.id = f.category_id
+             GROUP BY c.id
+             ORDER BY c.name ASC"
+        )?;
+
+        let categories = stmt.query_map([], |row| {
+            Ok((
+                Category {
+                    id: CategoryId::from_str(row.get::<_, String>(0)?).unwrap(),
+                    name: row.get(1)?,
+                    description: Some(row.get(2)?),
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
+                        .map(|d| d.with_timezone(&Utc))
+                        .unwrap(),
+                    updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                        .map(|d| d.with_timezone(&Utc))
+                        .unwrap(),
+                },
+                row.get(5)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(categories)
+    }
 }

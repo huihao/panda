@@ -34,9 +34,6 @@ pub trait FeedRepository: Send + Sync {
     /// Searches for feeds by title or URL
     fn search_feeds(&self, query: &str) -> Result<Vec<Feed>>;
     
-    /// Gets all feeds in a category
-    fn get_feeds_by_category(&self, category_id: &CategoryId) -> Result<Vec<Feed>>;
-    
     /// Gets all feeds that need to be updated
     fn get_feeds_to_update(&self) -> Result<Vec<Feed>>;
     
@@ -156,6 +153,18 @@ pub trait ArticleRepository: Send + Sync {
     
     /// Gets articles by tag
     fn get_articles_by_tag(&self, tag: &Tag) -> Result<Vec<Article>>;
+    
+    /// Marks an article as read
+    fn mark_as_read(&self, article_id: &ArticleId) -> Result<()>;
+    
+    /// Adds an article to favorites
+    fn add_to_favorites(&self, article_id: &ArticleId) -> Result<()>;
+    
+    /// Removes an article from favorites
+    fn remove_from_favorites(&self, article_id: &ArticleId) -> Result<()>;
+    
+    /// Checks if an article is in favorites
+    fn is_favorite(&self, article_id: &ArticleId) -> Result<bool>;
 }
 
 /// Repository interface for tag operations

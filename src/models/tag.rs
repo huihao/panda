@@ -1,4 +1,5 @@
 use std::fmt;
+use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid;
@@ -10,6 +11,24 @@ pub struct TagId(pub String);
 impl fmt::Display for TagId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl TagId {
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+    
+    pub fn to_string(&self) -> String {
+        self.0.clone()
+    }
+}
+
+impl FromStr for TagId {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(TagId(s.to_string()))
     }
 }
 
@@ -39,7 +58,7 @@ impl Tag {
     /// Creates a new tag with the given name
     pub fn new(name: String) -> Self {
         Self {
-            id: TagId(uuid::Uuid::new_v4().to_string()),
+            id: TagId::new(),
             name,
             description: None,
             color: None,
@@ -132,4 +151,4 @@ mod tests {
         tag.update_color(Some("#00FF00".to_string()));
         assert_eq!(tag.color, Some("#00FF00".to_string()));
     }
-} 
+}

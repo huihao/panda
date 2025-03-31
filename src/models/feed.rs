@@ -22,9 +22,21 @@ impl fmt::Display for FeedId {
     }
 }
 
+impl FromStr for FeedId {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(FeedId(s.to_string()))
+    }
+}
+
 impl FeedId {
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
+    }
+    
+    pub fn to_string(&self) -> String {
+        self.0.clone()
     }
 }
 

@@ -118,55 +118,47 @@ impl FeedManager {
     }
     
     /// Fetches feed information from the URL
-    fn fetch_feed_info(&mut self) -> Result<()> {
+    async fn fetch_feed_info(&mut self) -> Result<()> {
         if self.url_input.is_empty() {
             return Err(anyhow::anyhow!("URL cannot be empty"));
         }
 
         let url = Url::parse(&self.url_input)?;
-        let feed_info = self.rss_service.fetch_feed_info(&url)?;
+        let feed = self.rss_service.fetch_feed(&url).await?;
         
-        self.title = feed_info.title;
-        self.description = feed_info.description.unwrap_or_default();
+        self.title = feed.title;
+        self.description = feed.description.unwrap_or_default();
         self.url = url.to_string();
         
         Ok(())
     }
     
     /// Saves the current feed
-    fn save_feed(&mut self) -> Result<()> {
+    async fn save_feed(&mut self) -> Result<()> {
         if self.url.is_empty() {
             return Err(anyhow::anyhow!("URL cannot be empty"));
         }
 
         let url = Url::parse(&self.url)?;
-        let feed = Feed {
-            id: FeedId::new(),
-            url: url.to_string(),
-            title: self.title.clone(),
-            description: Some(self.description.clone()),
-            category_id: self.selected_category.clone(),
-            status: FeedStatus::Active,
-            last_sync: None,
-            error: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
+        let feed = Feed::new(
+            self.title.clone(),
+            url,
+        );
 
-        self.rss_service.add_feed(&feed)?;
+        self.rss_service.add_feed(&feed.url.to_string()).await?;
         Ok(())
     }
 
-    fn refresh(&mut self) -> Result<()> {
-        self.feeds = self.rss_service.get_all_feeds()?;
-        self.categories = self.rss_service.get_all_categories()?;
+    async fn refresh(&mut self) -> Result<()> {
+        self.feeds = self.rss_service.get_all_feeds().await?;
+        self.categories = self.rss_service.get_all_categories().await?;
         self.feeds.sort_by(|a, b| a.title.cmp(&b.title));
         self.categories.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(())
     }
 
-    fn delete_feed(&mut self, feed_id: &FeedId) -> Result<()> {
-        if let Err(e) = self.rss_service.delete_feed(feed_id) {
+    async fn delete_feed(&mut self, feed_id: &FeedId) -> Result<()> {
+        if let Err(e) = self.rss_service.delete_feed(feed_id).await {
             error!("Failed to delete feed: {}", e);
             return Err(e);
         }
@@ -174,31 +166,31 @@ impl FeedManager {
         Ok(())
     }
 
-    fn add_feed(&mut self) -> Result<()> {
+    async fn add_feed(&mut self) -> Result<()> {
         if self.url_input.is_empty() {
             return Err(anyhow::anyhow!("URL cannot be empty"));
         }
 
         // First fetch feed info to validate URL and get feed details
-        self.fetch_feed_info()?;
+        self.fetch_feed_info().await?;
         
         // Then save the feed
-        self.save_feed()?;
+        self.save_feed().await?;
         
         // Refresh the feeds list
-        self.refresh()?;
+        self.refresh().await?;
         
         Ok(())
     }
 
-    fn sync_feed(&mut self, feed: &Feed) -> Result<()> {
-        if let Err(e) = self.rss_service.update_feed(feed) {
+    async fn sync_feed(&mut self, feed: &Feed) -> Result<()> {
+        if let Err(e) = self.rss_service.update_feed(feed).await {
             error!("Failed to sync feed: {}", e);
             return Err(e);
         }
         
         // Refresh the feeds list to update status
-        self.refresh()?;
+        self.refresh().await?;
         Ok(())
     }
 }

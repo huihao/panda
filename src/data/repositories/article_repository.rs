@@ -11,10 +11,9 @@ use std::sync::{Arc, Mutex};
 use url::Url;
 use uuid::Uuid;
 
-// Fix the import path to use the external crate reference
-
 use crate::models::article::{Article, ArticleId, ReadStatus};
-use crate::models::feed::{Feed, FeedId, Tag};
+use crate::models::feed::{FeedId, CategoryId};
+use crate::models::Tag;
 use crate::base::repository::ArticleRepository;
 
 // Wrapper types for SQLite serialization
@@ -344,6 +343,364 @@ impl ArticleRepository for SqliteArticleRepository {
 
         let days_pattern = format!("-{} days", retention_days);
         let count = stmt.execute([days_pattern])?;
+        Ok(count)
+    }
+
+    /// Creates a new article
+    pub fn create_article(&self, article: &Article) -> Result<()> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "INSERT INTO articles (id, feed_id, title, url, author, content, summary, published_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )?;
+
+        stmt.execute([
+            &article.id.to_string(),
+            &article.feed_id.to_string(),
+            &article.title,
+            &article.url,
+            &article.author.as_deref().unwrap_or(""),
+            &article.content.as_deref().unwrap_or(""),
+            &article.summary.as_deref().unwrap_or(""),
+            &article.published_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+            &Utc::now().to_rfc3339(),
+            &Utc::now().to_rfc3339(),
+        ])?;
+
+        Ok(())
+    }
+
+    /// Gets all articles
+    pub fn get_all_articles(&self) -> Result<Vec<Article>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, feed_id, title, url, author, content, summary, published_at, created_at, updated_at
+             FROM articles
+             ORDER BY published_at DESC"
+        )?;
+
+        let articles = stmt.query_map([], |row| {
+            Ok(Article {
+                id: ArticleId::from_str(row.get::<_, String>(0)?).unwrap(),
+                feed_id: FeedId::from_str(row.get::<_, String>(1)?).unwrap(),
+                title: row.get(2)?,
+                url: row.get(3)?,
+                author: Some(row.get(4)?),
+                content: Some(row.get(5)?),
+                summary: Some(row.get(6)?),
+                published_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .ok(),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(articles)
+    }
+
+    /// Gets an article by ID
+    pub fn get_article(&self, id: &ArticleId) -> Result<Option<Article>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, feed_id, title, url, author, content, summary, published_at, created_at, updated_at
+             FROM articles
+             WHERE id = ?"
+        )?;
+
+        let article = stmt.query_row([id.to_string()], |row| {
+            Ok(Article {
+                id: ArticleId::from_str(row.get::<_, String>(0)?).unwrap(),
+                feed_id: FeedId::from_str(row.get::<_, String>(1)?).unwrap(),
+                title: row.get(2)?,
+                url: row.get(3)?,
+                author: Some(row.get(4)?),
+                content: Some(row.get(5)?),
+                summary: Some(row.get(6)?),
+                published_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .ok(),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+            })
+        })
+        .optional()?;
+
+        Ok(article)
+    }
+
+    /// Gets an article by URL
+    pub fn get_article_by_url(&self, url: &str) -> Result<Option<Article>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, feed_id, title, url, author, content, summary, published_at, created_at, updated_at
+             FROM articles
+             WHERE url = ?"
+        )?;
+
+        let article = stmt.query_row([url], |row| {
+            Ok(Article {
+                id: ArticleId::from_str(row.get::<_, String>(0)?).unwrap(),
+                feed_id: FeedId::from_str(row.get::<_, String>(1)?).unwrap(),
+                title: row.get(2)?,
+                url: row.get(3)?,
+                author: Some(row.get(4)?),
+                content: Some(row.get(5)?),
+                summary: Some(row.get(6)?),
+                published_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .ok(),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+            })
+        })
+        .optional()?;
+
+        Ok(article)
+    }
+
+    /// Gets articles by category
+    pub fn get_articles_by_category(&self, category_id: &CategoryId) -> Result<Vec<Article>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.feed_id, a.title, a.url, a.author, a.content, a.summary, a.published_at, a.created_at, a.updated_at
+             FROM articles a
+             JOIN feeds f ON a.feed_id = f.id
+             WHERE f.category_id = ?
+             ORDER BY a.published_at DESC"
+        )?;
+
+        let articles = stmt.query_map([category_id.to_string()], |row| {
+            Ok(Article {
+                id: ArticleId::from_str(row.get::<_, String>(0)?).unwrap(),
+                feed_id: FeedId::from_str(row.get::<_, String>(1)?).unwrap(),
+                title: row.get(2)?,
+                url: row.get(3)?,
+                author: Some(row.get(4)?),
+                content: Some(row.get(5)?),
+                summary: Some(row.get(6)?),
+                published_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .ok(),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(articles)
+    }
+
+    /// Gets favorite articles
+    pub fn get_favorite_articles(&self) -> Result<Vec<Article>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.feed_id, a.title, a.url, a.author, a.content, a.summary, a.published_at, a.created_at, a.updated_at
+             FROM articles a
+             JOIN article_favorites af ON a.id = af.article_id
+             ORDER BY a.published_at DESC"
+        )?;
+
+        let articles = stmt.query_map([], |row| {
+            Ok(Article {
+                id: ArticleId::from_str(row.get::<_, String>(0)?).unwrap(),
+                feed_id: FeedId::from_str(row.get::<_, String>(1)?).unwrap(),
+                title: row.get(2)?,
+                url: row.get(3)?,
+                author: Some(row.get(4)?),
+                content: Some(row.get(5)?),
+                summary: Some(row.get(6)?),
+                published_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .ok(),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(articles)
+    }
+
+    /// Gets articles by date range
+    pub fn get_articles_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Article>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, feed_id, title, url, author, content, summary, published_at, created_at, updated_at
+             FROM articles
+             WHERE published_at BETWEEN ? AND ?
+             ORDER BY published_at DESC"
+        )?;
+
+        let articles = stmt.query_map(
+            [start.to_rfc3339(), end.to_rfc3339()],
+            |row| {
+                Ok(Article {
+                    id: ArticleId::from_str(row.get::<_, String>(0)?).unwrap(),
+                    feed_id: FeedId::from_str(row.get::<_, String>(1)?).unwrap(),
+                    title: row.get(2)?,
+                    url: row.get(3)?,
+                    author: Some(row.get(4)?),
+                    content: Some(row.get(5)?),
+                    summary: Some(row.get(6)?),
+                    published_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
+                        .map(|d| d.with_timezone(&Utc))
+                        .ok(),
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
+                        .map(|d| d.with_timezone(&Utc))
+                        .unwrap(),
+                    updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                        .map(|d| d.with_timezone(&Utc))
+                        .unwrap(),
+                })
+            }
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(articles)
+    }
+
+    /// Gets articles by tag
+    pub fn get_articles_by_tag(&self, tag_id: &TagId) -> Result<Vec<Article>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.feed_id, a.title, a.url, a.author, a.content, a.summary, a.published_at, a.created_at, a.updated_at
+             FROM articles a
+             JOIN article_tags at ON a.id = at.article_id
+             WHERE at.tag_id = ?
+             ORDER BY a.published_at DESC"
+        )?;
+
+        let articles = stmt.query_map([tag_id.to_string()], |row| {
+            Ok(Article {
+                id: ArticleId::from_str(row.get::<_, String>(0)?).unwrap(),
+                feed_id: FeedId::from_str(row.get::<_, String>(1)?).unwrap(),
+                title: row.get(2)?,
+                url: row.get(3)?,
+                author: Some(row.get(4)?),
+                content: Some(row.get(5)?),
+                summary: Some(row.get(6)?),
+                published_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .ok(),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap(),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(articles)
+    }
+
+    /// Marks an article as read
+    pub fn mark_as_read(&self, article_id: &ArticleId) -> Result<()> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "UPDATE articles
+             SET is_read = true, updated_at = ?
+             WHERE id = ?"
+        )?;
+
+        stmt.execute([
+            &Utc::now().to_rfc3339(),
+            &article_id.to_string(),
+        ])?;
+
+        Ok(())
+    }
+
+    /// Adds an article to favorites
+    pub fn add_to_favorites(&self, article_id: &ArticleId) -> Result<()> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "INSERT INTO article_favorites (article_id, created_at)
+             VALUES (?, ?)"
+        )?;
+
+        stmt.execute([
+            &article_id.to_string(),
+            &Utc::now().to_rfc3339(),
+        ])?;
+
+        Ok(())
+    }
+
+    /// Removes an article from favorites
+    pub fn remove_from_favorites(&self, article_id: &ArticleId) -> Result<()> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "DELETE FROM article_favorites
+             WHERE article_id = ?"
+        )?;
+
+        stmt.execute([&article_id.to_string()])?;
+
+        Ok(())
+    }
+
+    /// Checks if an article is in favorites
+    pub fn is_favorite(&self, article_id: &ArticleId) -> Result<bool> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT COUNT(*)
+             FROM article_favorites
+             WHERE article_id = ?"
+        )?;
+
+        let count: i64 = stmt.query_row([&article_id.to_string()], |row| row.get(0))?;
+
+        Ok(count > 0)
+    }
+
+    /// Gets unread articles count
+    pub fn get_unread_count(&self) -> Result<i64> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT COUNT(*)
+             FROM articles
+             WHERE is_read = false"
+        )?;
+
+        let count: i64 = stmt.query_row([], |row| row.get(0))?;
+
+        Ok(count)
+    }
+
+    /// Gets favorite articles count
+    pub fn get_favorites_count(&self) -> Result<i64> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT COUNT(*)
+             FROM article_favorites"
+        )?;
+
+        let count: i64 = stmt.query_row([], |row| row.get(0))?;
+
         Ok(count)
     }
 }

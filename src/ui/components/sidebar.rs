@@ -3,10 +3,11 @@ use std::sync::Arc;
 use log::error;
 use anyhow::Result;
 use crate::base::repository::{FeedRepository, CategoryRepository};
-use crate::models::{Feed, Category, CategoryId};
+use crate::models::article::ArticleId;
+use crate::models::category::{Category, CategoryId};
+use crate::models::Feed;
 use crate::ui::styles::{AppColors, DEFAULT_PADDING};
 use crate::ui::context::Context;
-use crate::models::{category::Category, category::CategoryId, article::ArticleId};
 use std::collections::HashSet;
 
 /// Sidebar selection state
@@ -30,6 +31,7 @@ pub struct Sidebar {
     expanded_categories: HashSet<CategoryId>,
     selected_category: Option<CategoryId>,
     selected_article: Option<ArticleId>,
+    selected_feed: Option<Feed>,
 }
 
 impl Sidebar {
@@ -49,12 +51,13 @@ impl Sidebar {
             expanded_categories: HashSet::new(),
             selected_category: None,
             selected_article: None,
+            selected_feed: None,
         }
     }
     
     /// Renders the sidebar UI
-    pub fn ui(&mut self, ui: &mut Ui) -> Result<Option<SidebarSelection>> {
-        self.refresh()?;
+    pub async fn ui(&mut self, ui: &mut Ui) -> Result<Option<SidebarSelection>> {
+        self.refresh().await?;
         
         let mut selection = None;
         
@@ -118,7 +121,9 @@ impl Sidebar {
         ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                self.render_categories(ui, None, 0, &mut selection)?;
+                if let Err(e) = self.render_categories(ui, None, 0, &mut selection) {
+                    error!("Error rendering categories: {}", e);
+                }
                 
                 // Show uncategorized feeds
                 let uncategorized: Vec<_> = self.feeds.iter()
@@ -273,43 +278,67 @@ impl Sidebar {
             feed.url.to_string().to_lowercase().contains(&query)
     }
 
-    pub fn show(&mut self, ui: &mut Ui) -> Result<()> {
-        self.ui(ui)?;
+    /// Shows the sidebar
+    pub async fn show(&mut self, ctx: &mut Context) -> Result<()> {
+        egui::SidePanel::left("sidebar")
+            .show(ctx, |ui| {
+                // Search box
+                ui.horizontal(|ui| {
+                    ui.label("Search:");
+                    ui.text_edit_singleline(&mut self.search_query);
+                });
+
+                // Special sections
+                ui.separator();
+                if ui.button(RichText::new("📚 All Articles").color(self.colors.text)).clicked() {
+                    self.selection = None;
+                    self.selected_category = None;
+                    self.selected_feed = None;
+                }
+                if ui.button(RichText::new("⭐ Favorites").color(self.colors.text)).clicked() {
+                    self.selection = None;
+                    self.selected_category = None;
+                    self.selected_feed = None;
+                }
+
+                // Feeds and categories
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    // Show feeds
+                    for feed in &self.feeds {
+                        let is_selected = self.selection == Some(SidebarSelection::Feed(feed.clone()));
+                        let color = if is_selected {
+                            self.colors.accent
+                        } else {
+                            self.colors.text
+                        };
+                        if ui.button(RichText::new(&feed.title).color(color)).clicked() {
+                            self.selection = Some(SidebarSelection::Feed(feed.clone()));
+                            self.selected_category = None;
+                            self.selected_feed = Some(feed.clone());
+                        }
+                    }
+
+                    // Show categories
+                    for category in &self.categories {
+                        let is_selected = self.selected_category == Some(category.id.clone());
+                        let color = if is_selected {
+                            self.colors.accent
+                        } else {
+                            self.colors.text
+                        };
+                        if ui.button(RichText::new(&category.name).color(color)).clicked() {
+                            self.selected_category = Some(category.id.clone());
+                            self.selected_feed = None;
+                        }
+                    }
+                });
+            });
+
         Ok(())
     }
 
-    fn render_category(&mut self, ui: &mut Ui, category: &Category) -> Result<()> {
-        let label_text = format!("📁 {}", category.name);
-        if self.selection == Some(SidebarSelection::Category(category.id.clone())) {
-            ui.add(Label::new(
-                RichText::new(label_text)
-                    .color(self.colors.accent)
-                    .size(14.0)
-            ));
-        } else {
-            if ui.add(Label::new(
-                RichText::new(label_text)
-                    .color(self.colors.text)
-                    .size(14.0)
-            )).clicked() {
-                self.selection = Some(SidebarSelection::Category(category.id.clone()));
-            }
-        }
-        Ok(())
-    }
-
-    pub fn select_category(&mut self, category_id: CategoryId) {
-        self.selected_category = Some(category_id);
-    }
-
-    pub fn toggle_category(&mut self, category_id: CategoryId) {
-        if self.expanded_categories.contains(&category_id) {
-            self.expanded_categories.remove(&category_id);
-        } else {
-            self.expanded_categories.insert(category_id);
-        }
-    }
-
+    /// Refreshes the sidebar data
     pub async fn refresh(&mut self) -> Result<()> {
         self.feeds = self.feed_repository.get_all_feeds()?;
         self.categories = self.category_repository.get_all_categories()?;
@@ -317,7 +346,14 @@ impl Sidebar {
         self.categories.sort_by(|a, b| a.name.cmp(&b.name));
         self.selected_category = None;
         self.selected_article = None;
+        self.selected_feed = None;
         self.expanded_categories.clear();
         Ok(())
+    }
+
+    /// Selects a category
+    pub fn select_category(&mut self, category_id: CategoryId) {
+        self.selected_category = Some(category_id);
+        self.selected_feed = None;
     }
 }
