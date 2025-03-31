@@ -1,111 +1,137 @@
-use std::path::Path;
+use std::io::Cursor;
+use quick_xml::events::{Event, BytesStart};
+use quick_xml::Reader;
+use quick_xml::writer::Writer;
 use anyhow::Result;
-use quick_xml::events::{Event, BytesStart, BytesEnd, BytesText};
-use std::sync::Arc;
-use log::error;
 use url::Url;
-use opml::{Outline, OPML};
-use chrono::Utc;
+use std::sync::Arc;
 
-use crate::models::category::{Category, CategoryId};
 use crate::models::feed::{Feed, FeedId};
+use crate::models::category::Category;
 use crate::services::rss::RssService;
 
-/// Service for importing and exporting OPML files
+#[derive(Debug)]
+struct Outline {
+    text: String,
+    xml_url: Option<String>,
+    html_url: Option<String>,
+}
+
 pub struct OpmlService {
     rss_service: Arc<RssService>,
 }
 
 impl OpmlService {
-    /// Creates a new OPML service
     pub fn new(rss_service: Arc<RssService>) -> Self {
         Self { rss_service }
     }
 
-    /// Imports feeds from an OPML file
-    pub async fn import_opml(&self, content: &str) -> Result<()> {
-        let opml = opml::Opml::new(content)?;
-        let mut category_stack: Vec<CategoryId> = Vec::new();
+    pub async fn import(&self, content: &str) -> Result<(Vec<Feed>, Vec<Category>)> {
+        let mut reader = Reader::from_str(content);
+        reader.trim_text(true);
 
-        for outline in opml.body.outlines {
-            if let Some(url) = outline.xml_url.as_ref() {
-                let url = Url::parse(url)?;
-                let mut feed = Feed::new(outline.text.unwrap_or_default(), url);
-                
-                if let Some(category_name) = outline.text {
-                    if let Ok(categories) = self.rss_service.search_categories(&category_name).await {
-                        if let Some(category) = categories.first() {
-                            feed = feed.with_category(category.id.clone());
+        let mut feeds = Vec::new();
+        let mut categories = Vec::new();
+        let mut buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut buf)? {
+                Event::Start(ref e) if e.name().as_ref() == b"outline" => {
+                    if let Some(outline) = self.parse_outline(e) {
+                        if let Some(xml_url) = outline.xml_url {
+                            let feed = Feed::new(
+                                outline.text,
+                                Url::parse(&xml_url)?
+                            );
+                            if let Some(html_url) = outline.html_url {
+                                if let Ok(site_url) = Url::parse(&html_url) {
+                                    feed.with_site_url(site_url);
+                                }
+                            }
+                            feeds.push(feed);
+                        } else {
+                            let category = Category::new(outline.text, None);
+                            categories.push(category);
                         }
                     }
                 }
-                
-                self.rss_service.add_feed(&feed.url.to_string()).await?;
-            } else if let Some(text) = outline.text {
-                let mut category = Category::new(text.clone());
-                if let Some(parent_id) = category_stack.last() {
-                    category = category.with_parent_id(parent_id.clone());
-                }
-                self.rss_service.save_category(&category).await?;
-                category_stack.push(category.id);
+                Event::Eof => break,
+                _ => (),
             }
         }
 
-        Ok(())
+        Ok((feeds, categories))
     }
 
-    /// Exports feeds to an OPML file
-    pub async fn export_opml(&self) -> Result<String> {
-        let feeds = self.rss_service.get_all_feeds().await?;
-        let categories = self.rss_service.get_all_categories().await?;
+    pub fn export(&self, feeds: &[Feed], categories: &[Category]) -> Result<String> {
+        let mut writer = Writer::new(Cursor::new(Vec::new()));
 
-        let mut opml = OPML::default();
-        opml.head.title = Some("Panda RSS Feeds".to_string());
+        // Write XML declaration
+        writer.write_event(Event::Decl(quick_xml::events::BytesDecl::new(
+            "1.0",
+            Some("UTF-8"),
+            None,
+        )))?;
 
+        // Write OPML root element
+        let mut opml = BytesStart::new("opml");
+        opml.push_attribute(("version", "2.0"));
+        writer.write_event(Event::Start(opml))?;
+
+        // Write head element
+        writer.write_event(Event::Start(BytesStart::new("head")))?;
+        writer.write_event(Event::End(BytesStart::new("head")))?;
+
+        // Write body element
+        writer.write_event(Event::Start(BytesStart::new("body")))?;
+
+        // Write categories
         for category in categories {
-            let category_feeds: Vec<_> = feeds
-                .iter()
-                .filter(|f| f.category_id.as_ref() == Some(&category.id))
-                .collect();
+            let mut cat_el = BytesStart::new("outline");
+            cat_el.push_attribute(("text", category.name.as_str()));
+            writer.write_event(Event::Start(cat_el.clone()))?;
+            writer.write_event(Event::End(cat_el))?;
+        }
 
-            if !category_feeds.is_empty() {
-                let mut category_outline = opml::Outline::default();
-                category_outline.text = Some(category.name);
-                category_outline.title = Some(category.name);
+        // Write feeds
+        for feed in feeds {
+            let mut feed_el = BytesStart::new("outline");
+            feed_el.push_attribute(("text", feed.title.as_str()));
+            feed_el.push_attribute(("xmlUrl", feed.url.as_str()));
+            if let Some(site_url) = &feed.site_url {
+                feed_el.push_attribute(("htmlUrl", site_url.as_str()));
+            }
+            writer.write_event(Event::Empty(feed_el))?;
+        }
 
-                for feed in category_feeds {
-                    let mut feed_outline = opml::Outline::default();
-                    feed_outline.text = Some(feed.title.clone());
-                    feed_outline.title = Some(feed.title.clone());
-                    feed_outline.xml_url = Some(feed.url.to_string());
-                    category_outline.outlines.push(feed_outline);
+        // Close body and opml elements
+        writer.write_event(Event::End(BytesStart::new("body")))?;
+        writer.write_event(Event::End(BytesStart::new("opml")))?;
+
+        let result = String::from_utf8(writer.into_inner().into_inner())?;
+        Ok(result)
+    }
+
+    fn parse_outline(&self, element: &BytesStart) -> Option<Outline> {
+        let mut text = None;
+        let mut xml_url = None;
+        let mut html_url = None;
+
+        for attr in element.attributes() {
+            if let Ok(attr) = attr {
+                match attr.key.as_ref() {
+                    b"text" => text = String::from_utf8(attr.value.to_vec()).ok(),
+                    b"xmlUrl" => xml_url = String::from_utf8(attr.value.to_vec()).ok(),
+                    b"htmlUrl" => html_url = String::from_utf8(attr.value.to_vec()).ok(),
+                    _ => (),
                 }
-
-                opml.body.outlines.push(category_outline);
             }
         }
 
-        let uncategorized_feeds: Vec<_> = feeds
-            .iter()
-            .filter(|f| f.category_id.is_none())
-            .collect();
-
-        if !uncategorized_feeds.is_empty() {
-            let mut uncategorized_outline = opml::Outline::default();
-            uncategorized_outline.text = Some("Uncategorized".to_string());
-            uncategorized_outline.title = Some("Uncategorized".to_string());
-
-            for feed in uncategorized_feeds {
-                let mut feed_outline = opml::Outline::default();
-                feed_outline.text = Some(feed.title.clone());
-                feed_outline.title = Some(feed.title.clone());
-                feed_outline.xml_url = Some(feed.url.to_string());
-                uncategorized_outline.outlines.push(feed_outline);
-            }
-
-            opml.body.outlines.push(uncategorized_outline);
-        }
-
-        Ok(opml.to_string())
+        text.map(|t| Outline {
+            text: t,
+            xml_url,
+            html_url,
+        })
     }
 }

@@ -1,308 +1,159 @@
-use anyhow::Result;
-use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, Pool, Row};
-use uuid::Uuid;
 use std::sync::Arc;
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::Connection;
+use anyhow::Result;
+use async_trait::async_trait;
 
-use crate::base::repository::CategoryRepository;
 use crate::models::category::{Category, CategoryId};
+use crate::base::repository::CategoryRepository;
 
-/// SQLite-based category repository implementation
 pub struct SqliteCategoryRepository {
-    pool: Arc<Pool<SqliteConnectionManager>>,
+    connection: Arc<Connection>,
 }
 
 impl SqliteCategoryRepository {
-    /// Creates a new SQLite category repository
-    pub fn new(pool: Arc<Pool<SqliteConnectionManager>>) -> Self {
-        Self { pool }
+    pub fn new(connection: Arc<Connection>) -> Self {
+        Self { connection }
     }
 
-    pub fn init(&self) -> Result<()> {
-        let conn = self.pool.get()?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS categories (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT,
-                parent_id TEXT,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                FOREIGN KEY(parent_id) REFERENCES categories(id)
-            )",
-            [],
-        )?;
-        Ok(())
-    }
-
-    /// Maps a database row to a Category
-    fn map_row(row: &Row) -> Result<Category> {
+    fn map_row(&self, row: &rusqlite::Row) -> Result<Category> {
         Ok(Category {
-            id: CategoryId(row.get(0)?),
+            id: row.get::<_, String>(0)?.into(),
             name: row.get(1)?,
-            parent_id: row.get(2)?,
-            is_expanded: row.get(3)?,
-            created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)?.with_timezone(&Utc),
-            updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)?.with_timezone(&Utc),
+            description: row.get(2)?,
+            parent_id: row.get::<_, Option<String>>(3)?.map(|s| s.into()),
+            is_expanded: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
         })
     }
 }
 
+#[async_trait]
 impl CategoryRepository for SqliteCategoryRepository {
-    fn create_category(&self, category: &Category) -> Result<()> {
-        let conn = self.pool.get()?;
-        conn.execute(
-            "INSERT INTO categories (id, name, description, parent_id, is_expanded, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                category.id.0,
-                category.name,
-                category.description,
-                category.parent_id.as_ref().map(|id| id.0.clone()),
-                category.is_expanded,
-                category.created_at.to_rfc3339(),
-                category.updated_at.to_rfc3339(),
-            ],
+    async fn get_category_by_id(&self, id: &CategoryId) -> Result<Option<Category>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
+             FROM categories 
+             WHERE id = ?"
         )?;
-        Ok(())
-    }
 
-    fn get_category_by_id(&self, id: &CategoryId) -> Result<Option<Category>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("SELECT * FROM categories WHERE id = ?")?;
-        let mut rows = stmt.query(params![id.0])?;
+        let mut rows = stmt.query([id.to_string()])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(Self::map_row(row)?))
+            Ok(Some(self.map_row(row)?))
         } else {
             Ok(None)
         }
     }
 
-    fn get_all_categories(&self) -> Result<Vec<Category>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at FROM categories"
+    async fn get_all_categories(&self) -> Result<Vec<Category>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
+             FROM categories 
+             ORDER BY name"
         )?;
 
-        let mut categories = Vec::new();
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            categories.push(Self::map_row(row)?);
-        }
-
+        let rows = stmt.query_map([], |row| self.map_row(row))?;
+        let categories = rows.collect::<Result<Vec<_>>>()?;
         Ok(categories)
     }
 
-    fn get_categories_by_parent(&self, parent_id: &CategoryId) -> Result<Vec<Category>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("SELECT * FROM categories WHERE parent_id = ?")?;
-        let mut rows = stmt.query(params![parent_id.0])?;
-        let mut categories = Vec::new();
-        while let Some(row) = rows.next()? {
-            categories.push(Self::map_row(row)?);
-        }
+    async fn get_categories_by_parent(&self, parent_id: &Option<CategoryId>) -> Result<Vec<Category>> {
+        let mut stmt = match parent_id {
+            Some(id) => {
+                self.connection.prepare(
+                    "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
+                     FROM categories 
+                     WHERE parent_id = ? 
+                     ORDER BY name"
+                )?
+            },
+            None => {
+                self.connection.prepare(
+                    "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
+                     FROM categories 
+                     WHERE parent_id IS NULL 
+                     ORDER BY name"
+                )?
+            }
+        };
+
+        let rows = if let Some(id) = parent_id {
+            stmt.query_map([id.to_string()], |row| self.map_row(row))?
+        } else {
+            stmt.query_map([], |row| self.map_row(row))?
+        };
+
+        let categories = rows.collect::<Result<Vec<_>>>()?;
         Ok(categories)
     }
 
-    fn get_root_categories(&self) -> Result<Vec<Category>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("SELECT * FROM categories WHERE parent_id IS NULL")?;
-        let mut rows = stmt.query([])?;
-        let mut categories = Vec::new();
-        while let Some(row) = rows.next()? {
-            categories.push(Self::map_row(row)?);
-        }
-        Ok(categories)
-    }
-
-    fn get_child_categories(&self, parent_id: &CategoryId) -> Result<Vec<Category>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at FROM categories WHERE parent_id = ?"
+    async fn get_root_categories(&self) -> Result<Vec<Category>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
+             FROM categories 
+             WHERE parent_id IS NULL 
+             ORDER BY name"
         )?;
 
-        let mut categories = Vec::new();
-        let mut rows = stmt.query(params![parent_id.0])?;
-        while let Some(row) = rows.next()? {
-            categories.push(Self::map_row(row)?);
-        }
-
+        let rows = stmt.query_map([], |row| self.map_row(row))?;
+        let categories = rows.collect::<Result<Vec<_>>>()?;
         Ok(categories)
     }
 
-    fn get_categories_by_name(&self, name: &str) -> Result<Vec<Category>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at FROM categories WHERE name LIKE ?"
+    async fn get_child_categories(&self, parent_id: &CategoryId) -> Result<Vec<Category>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
+             FROM categories 
+             WHERE parent_id = ? 
+             ORDER BY name"
         )?;
 
-        let mut categories = Vec::new();
-        let mut rows = stmt.query(params![format!("%{}%", name)])?;
-        while let Some(row) = rows.next()? {
-            categories.push(Self::map_row(row)?);
-        }
-
+        let rows = stmt.query_map([parent_id.to_string()], |row| self.map_row(row))?;
+        let categories = rows.collect::<Result<Vec<_>>>()?;
         Ok(categories)
     }
 
-    fn get_recently_updated_categories(&self, limit: usize) -> Result<Vec<Category>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at FROM categories ORDER BY updated_at DESC LIMIT ?"
-        )?;
-
-        let mut categories = Vec::new();
-        let mut rows = stmt.query(params![limit as i64])?;
-        while let Some(row) = rows.next()? {
-            categories.push(Self::map_row(row)?);
-        }
-
-        Ok(categories)
-    }
-
-    fn update_category(&self, category: &Category) -> Result<()> {
-        let conn = self.pool.get()?;
-        conn.execute(
-            "UPDATE categories
-             SET name = ?1, description = ?2, parent_id = ?3, is_expanded = ?4, updated_at = ?5
-             WHERE id = ?6",
-            params![
+    async fn save_category(&self, category: &Category) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO categories (
+                id, name, description, parent_id, is_expanded, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                category.id.to_string(),
                 category.name,
                 category.description,
-                category.parent_id.as_ref().map(|id| id.0.clone()),
+                category.parent_id.as_ref().map(|id| id.to_string()),
                 category.is_expanded,
-                category.updated_at.to_rfc3339(),
-                category.id.0,
+                category.created_at,
+                category.updated_at,
             ],
         )?;
         Ok(())
     }
 
-    fn delete_category(&self, id: &CategoryId) -> Result<()> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("DELETE FROM categories WHERE id = ?")?;
-        stmt.execute(params![id.0])?;
+    async fn update_category(&self, category: &Category) -> Result<()> {
+        self.connection.execute(
+            "UPDATE categories SET 
+                name = ?, 
+                description = ?,
+                parent_id = ?,
+                is_expanded = ?,
+                updated_at = ?
+            WHERE id = ?",
+            rusqlite::params![
+                category.name,
+                category.description,
+                category.parent_id.as_ref().map(|id| id.to_string()),
+                category.is_expanded,
+                category.updated_at,
+                category.id.to_string(),
+            ],
+        )?;
         Ok(())
     }
 
-    fn search_categories(&self, query: &str) -> Result<Vec<Category>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("SELECT * FROM categories WHERE name LIKE ?")?;
-        let pattern = format!("%{}%", query);
-        let mut rows = stmt.query(params![pattern])?;
-        let mut categories = Vec::new();
-        while let Some(row) = rows.next()? {
-            categories.push(Self::map_row(row)?);
-        }
-        Ok(categories)
-    }
-    
-    fn get_categories_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Category>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT * FROM categories
-            WHERE created_at BETWEEN ? AND ?
-            ORDER BY name"
-        )?;
-        
-        let mut categories = Vec::new();
-        let rows = stmt.query([
-            &start.to_rfc3339(),
-            &end.to_rfc3339(),
-        ])?;
-        
-        for row in rows {
-            categories.push(Self::map_row(row)?);
-        }
-        
-        Ok(categories)
-    }
-    
-    fn get_category_hierarchy(&self) -> Result<Vec<Category>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
-            "WITH RECURSIVE category_tree AS (
-                SELECT c.*, 1 as level
-                FROM categories c
-                WHERE parent_id IS NULL
-                
-                UNION ALL
-                
-                SELECT c.*, ct.level + 1
-                FROM categories c
-                JOIN category_tree ct ON c.parent_id = ct.id
-            )
-            SELECT * FROM category_tree
-            ORDER BY level, name"
-        )?;
-        
-        let mut categories = Vec::new();
-        let rows = stmt.query([])?;
-        
-        for row in rows {
-            categories.push(Self::map_row(row)?);
-        }
-        
-        Ok(categories)
-    }
-
-    fn save_category(&self, category: &Category) -> Result<()> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
-            "INSERT OR REPLACE INTO categories (id, name, parent_id, is_expanded, created_at, updated_at) 
-             VALUES (?, ?, ?, ?, ?, ?)"
-        )?;
-        stmt.execute(params![
-            category.id.0,
-            category.name,
-            category.parent_id.as_ref().map(|id| id.0.clone()),
-            category.is_expanded,
-            category.created_at.to_rfc3339(),
-            category.updated_at.to_rfc3339(),
-        ])?;
+    async fn delete_category(&self, id: &CategoryId) -> Result<()> {
+        self.connection.execute("DELETE FROM categories WHERE id = ?", [id.to_string()])?;
         Ok(())
-    }
-
-    /// Gets categories count
-    pub fn get_categories_count(&self) -> Result<i64> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("SELECT COUNT(*) FROM categories")?;
-        let count: i64 = stmt.query_row([], |row| row.get(0))?;
-        Ok(count)
-    }
-
-    /// Gets categories with feeds count
-    pub fn get_categories_with_counts(&self) -> Result<Vec<(Category, i64)>> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.name, c.description, c.created_at, c.updated_at,
-                    COUNT(f.id) as feeds_count
-             FROM categories c
-             LEFT JOIN feeds f ON c.id = f.category_id
-             GROUP BY c.id
-             ORDER BY c.name ASC"
-        )?;
-
-        let categories = stmt.query_map([], |row| {
-            Ok((
-                Category {
-                    id: CategoryId::from_str(row.get::<_, String>(0)?).unwrap(),
-                    name: row.get(1)?,
-                    description: Some(row.get(2)?),
-                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
-                        .map(|d| d.with_timezone(&Utc))
-                        .unwrap(),
-                    updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
-                        .map(|d| d.with_timezone(&Utc))
-                        .unwrap(),
-                },
-                row.get(5)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(categories)
     }
 }

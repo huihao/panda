@@ -52,44 +52,70 @@ impl RssService {
         Ok(())
     }
 
+    pub async fn fetch_feed_by_id(&self, feed_id: &FeedId) -> Result<Feed> {
+        if let Some(feed) = self.feed_repository.get_feed_by_id(feed_id)? {
+            self.fetch_feed(feed.url.as_str()).await
+        } else {
+            Err(anyhow::anyhow!("Feed not found"))
+        }
+    }
+
     /// Fetches and parses a feed
-    pub async fn fetch_feed(&self, feed_id: &FeedId) -> Result<Feed> {
-        let feed = self.feed_repository.get_feed_by_id(feed_id)?
-            .ok_or_else(|| anyhow::anyhow!("Feed not found"))?;
-
-        let response = reqwest::get(feed.url.as_str()).await?;
-        let content = response.text().await?;
-        let feed_data = parser::parse(content.as_bytes())?;
-
-        let mut article = Article::new(
-            feed.id.clone(),
-            feed_data.title.map(|t| t.content).unwrap_or_default(),
-            feed.url.clone(),
+    pub async fn fetch_feed(&self, url: &str) -> Result<Feed> {
+        let response = reqwest::get(url).await?;
+        let content = response.bytes().await?;
+        let feed_rs = feed_rs::parser::parse(&content[..])?;
+        
+        let mut feed = Feed::new(
+            feed_rs.title.map(|t| t.content).unwrap_or_else(|| "Untitled Feed".to_string()),
+            Url::parse(url)?
         );
 
-        if let Some(author) = feed_data.authors.first() {
-            article = article.with_author(author.name.clone());
+        if let Some(desc) = feed_rs.description.map(|d| d.content) {
+            feed = feed.with_description(desc);
         }
 
-        if let Some(entry) = feed_data.entries.first() {
-            if let Some(content) = entry.content.first() {
-                article = article.with_content(content.body.clone());
-            }
-            if let Some(summary) = &entry.summary {
-                article = article.with_summary(summary.content.clone());
-            }
-            if let Some(published) = entry.published {
-                article = article.with_published_at(published);
+        if let Some(lang) = feed_rs.language {
+            feed = feed.with_language(lang);
+        }
+
+        if let Some(link) = feed_rs.links.first() {
+            if let Ok(site_url) = Url::parse(&link.href) {
+                feed = feed.with_site_url(site_url);
             }
         }
 
-        self.article_repository.create_article(&article)?;
+        Ok(feed)
+    }
+
+    pub async fn fetch_articles(&self, feed: &Feed) -> Result<Vec<Article>> {
+        let response = reqwest::get(feed.url.as_str()).await?;
+        let content = response.bytes().await?;
+        let feed_rs = feed_rs::parser::parse(&content[..])?;
         
-        let mut updated_feed = feed.clone();
-        updated_feed.update_fetch_times(Utc::now(), Utc::now() + chrono::Duration::hours(1));
-        self.feed_repository.update_feed(&updated_feed)?;
+        let mut articles = Vec::new();
+        for entry in feed_rs.entries {
+            let content = entry.content.and_then(|c| c.body);
+            let summary = entry.summary.map(|s| s.content);
+            
+            let mut article = Article::new(
+                feed.id.clone(),
+                entry.title.map(|t| t.content).unwrap_or_else(|| "Untitled".to_string()),
+                Url::parse(&entry.links.get(0).map(|l| l.href.clone()).unwrap_or_default())?
+            );
 
-        Ok(updated_feed)
+            if let Some(content) = content {
+                article = article.with_content(content);
+            }
+
+            if let Some(summary) = summary {
+                article = article.with_summary(summary);
+            }
+            
+            articles.push(article);
+        }
+        
+        Ok(articles)
     }
 
     /// Adds a new feed
@@ -245,13 +271,13 @@ impl RssService {
 
     /// Syncs a feed
     pub async fn sync_feed(&self, feed_id: &FeedId) -> Result<()> {
-        self.fetch_feed(feed_id).await?;
+        self.fetch_feed_by_id(feed_id).await?;
         Ok(())
     }
 
     /// Syncs all feeds
     pub async fn sync_all_feeds(&self) -> Result<()> {
-        let feeds = self.feed_repository.get_feeds_to_fetch()?;
+        let feeds = self.feed_repository.get_feeds_to_update()?;
         for feed in feeds {
             if let Err(e) = self.sync_feed(&feed.id).await {
                 log::error!("Failed to sync feed {}: {}", feed.id, e);
