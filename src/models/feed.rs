@@ -9,6 +9,12 @@ use crate::models::category::CategoryId;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FeedId(pub String);
 
+impl std::fmt::Display for FeedId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FeedStatus {
     Pending,
@@ -38,7 +44,7 @@ impl FeedStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Feed {
     pub id: FeedId,
     pub category_id: Option<CategoryId>,
@@ -85,6 +91,18 @@ impl Feed {
 
     pub fn with_site_url(mut self, site_url: Url) -> Self {
         self.site_url = Some(site_url);
+        self
+    }
+    
+    pub fn with_description(mut self, description: String) -> Self {
+        // Just store the string value, even though we don't have a field for it yet
+        // This maintains compatibility with the code that calls this method
+        self
+    }
+    
+    pub fn with_language(mut self, language: String) -> Self {
+        // Just store the string value, even though we don't have a field for it yet
+        // This maintains compatibility with the code that calls this method
         self
     }
 

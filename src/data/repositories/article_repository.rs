@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use rusqlite::Connection;
 use chrono::{DateTime, Utc};
 use anyhow::Result;
@@ -11,11 +11,11 @@ use crate::models::tag::TagId;
 use crate::base::repository::ArticleRepository;
 
 pub struct SqliteArticleRepository {
-    connection: Arc<Connection>,
+    connection: Arc<Mutex<Connection>>,
 }
 
 impl SqliteArticleRepository {
-    pub fn new(connection: Arc<Connection>) -> Self {
+    pub fn new(connection: Arc<Mutex<Connection>>) -> Self {
         Self { connection }
     }
 
@@ -40,7 +40,7 @@ impl SqliteArticleRepository {
 #[async_trait]
 impl ArticleRepository for SqliteArticleRepository {
     async fn get_article(&self, id: &ArticleId) -> Result<Option<Article>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT id, feed_id, category_id, title, url, author, content, summary, 
                     published_at, read_status, is_favorited, created_at, updated_at 
              FROM articles 
@@ -56,34 +56,38 @@ impl ArticleRepository for SqliteArticleRepository {
     }
 
     async fn get_all_articles(&self) -> Result<Vec<Article>> {
-        let mut stmt = self.connection.prepare(
-            "SELECT id, feed_id, category_id, title, url, author, content, summary,
+        let mut stmt = self.connection.lock().unwrap().prepare(
+            "SELECT id, feed_id, title, url, author, content, summary,
                     published_at, read_status, is_favorited, created_at, updated_at 
              FROM articles 
              ORDER BY published_at DESC"
         )?;
 
-        let rows = stmt.query_map([], |row| self.map_row(row))?;
-        let articles = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([], |row| Ok(self.map_row(row)))?;
+        let articles = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(articles)
     }
 
     async fn get_articles_by_feed(&self, feed_id: &FeedId) -> Result<Vec<Article>> {
-        let mut stmt = self.connection.prepare(
-            "SELECT id, feed_id, category_id, title, url, author, content, summary,
+        let mut stmt = self.connection.lock().unwrap().prepare(
+            "SELECT id, feed_id, title, url, author, content, summary,
                     published_at, read_status, is_favorited, created_at, updated_at 
              FROM articles 
              WHERE feed_id = ? 
              ORDER BY published_at DESC"
         )?;
 
-        let rows = stmt.query_map([feed_id.to_string()], |row| self.map_row(row))?;
-        let articles = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([feed_id.to_string()], |row| Ok(self.map_row(row)))?;
+        let articles = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(articles)
     }
 
     async fn get_articles_by_category(&self, category_id: &CategoryId) -> Result<Vec<Article>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT a.id, a.feed_id, a.category_id, a.title, a.url, a.author, a.content, 
                     a.summary, a.published_at, a.read_status, a.is_favorited, 
                     a.created_at, a.updated_at 
@@ -93,13 +97,15 @@ impl ArticleRepository for SqliteArticleRepository {
              ORDER BY a.published_at DESC"
         )?;
 
-        let rows = stmt.query_map([category_id.to_string()], |row| self.map_row(row))?;
-        let articles = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([category_id.to_string()], |row| Ok(self.map_row(row)))?;
+        let articles = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(articles)
     }
 
     async fn get_articles_by_tag(&self, tag_id: &TagId) -> Result<Vec<Article>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT a.id, a.feed_id, a.category_id, a.title, a.url, a.author, a.content, 
                     a.summary, a.published_at, a.read_status, a.is_favorited, 
                     a.created_at, a.updated_at 
@@ -109,13 +115,15 @@ impl ArticleRepository for SqliteArticleRepository {
              ORDER BY a.published_at DESC"
         )?;
 
-        let rows = stmt.query_map([tag_id.to_string()], |row| self.map_row(row))?;
-        let articles = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([tag_id.to_string()], |row| Ok(self.map_row(row)))?;
+        let articles = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(articles)
     }
 
     async fn get_unread_articles(&self) -> Result<Vec<Article>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT id, feed_id, category_id, title, url, author, content, summary,
                     published_at, read_status, is_favorited, created_at, updated_at 
              FROM articles 
@@ -123,13 +131,15 @@ impl ArticleRepository for SqliteArticleRepository {
              ORDER BY published_at DESC"
         )?;
 
-        let rows = stmt.query_map([], |row| self.map_row(row))?;
-        let articles = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([], |row| Ok(self.map_row(row)))?;
+        let articles = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(articles)
     }
 
     async fn get_favorite_articles(&self) -> Result<Vec<Article>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT id, feed_id, category_id, title, url, author, content, summary,
                     published_at, read_status, is_favorited, created_at, updated_at 
              FROM articles 
@@ -137,14 +147,16 @@ impl ArticleRepository for SqliteArticleRepository {
              ORDER BY published_at DESC"
         )?;
 
-        let rows = stmt.query_map([], |row| self.map_row(row))?;
-        let articles = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([], |row| Ok(self.map_row(row)))?;
+        let articles = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(articles)
     }
 
     async fn search_articles(&self, query: &str) -> Result<Vec<Article>> {
         let search_term = format!("%{}%", query);
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT id, feed_id, category_id, title, url, author, content, summary,
                     published_at, read_status, is_favorited, created_at, updated_at 
              FROM articles 
@@ -152,13 +164,15 @@ impl ArticleRepository for SqliteArticleRepository {
              ORDER BY published_at DESC"
         )?;
 
-        let rows = stmt.query_map([&search_term, &search_term, &search_term], |row| self.map_row(row))?;
-        let articles = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([&search_term, &search_term, &search_term], |row| Ok(self.map_row(row)))?;
+        let articles = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(articles)
     }
 
     async fn get_articles_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Article>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT id, feed_id, category_id, title, url, author, content, summary,
                     published_at, read_status, is_favorited, created_at, updated_at 
              FROM articles 
@@ -166,13 +180,15 @@ impl ArticleRepository for SqliteArticleRepository {
              ORDER BY published_at DESC"
         )?;
 
-        let rows = stmt.query_map([start, end], |row| self.map_row(row))?;
-        let articles = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([start, end], |row| Ok(self.map_row(row)))?;
+        let articles = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(articles)
     }
 
     async fn save_article(&self, article: &Article) -> Result<()> {
-        self.connection.execute(
+        self.connection.lock().unwrap().execute(
             "INSERT INTO articles (
                 id, feed_id, title, url, author, content, summary, published_at,
                 read_status, is_favorited, created_at, updated_at
@@ -196,7 +212,7 @@ impl ArticleRepository for SqliteArticleRepository {
     }
 
     async fn update_article(&self, article: &Article) -> Result<()> {
-        self.connection.execute(
+        self.connection.lock().unwrap().execute(
             "UPDATE articles SET
                 feed_id = ?,
                 title = ?,
@@ -227,7 +243,7 @@ impl ArticleRepository for SqliteArticleRepository {
     }
 
     async fn delete_article(&self, id: &ArticleId) -> Result<()> {
-        self.connection.execute("DELETE FROM articles WHERE id = ?", [id.to_string()])?;
+        self.connection.lock().unwrap().execute("DELETE FROM articles WHERE id = ?", [id.to_string()])?;
         Ok(())
     }
 }

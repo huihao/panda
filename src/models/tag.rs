@@ -6,6 +6,12 @@ use rusqlite::types::{FromSql, ToSql, ToSqlOutput, ValueRef, FromSqlResult};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TagId(pub String);
 
+impl std::fmt::Display for TagId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tag {
     pub id: TagId,

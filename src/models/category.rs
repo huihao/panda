@@ -6,7 +6,13 @@ use rusqlite::types::{FromSql, ToSql, ToSqlOutput, ValueRef, FromSqlResult};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CategoryId(pub String);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl std::fmt::Display for CategoryId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Category {
     pub id: CategoryId,
     pub name: String,

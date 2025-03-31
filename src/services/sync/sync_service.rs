@@ -18,6 +18,8 @@ impl SyncService {
     }
 
     pub async fn sync_feed(&self, feed_id: &str) -> Result<()> {
-        self.rss_service.sync_feed(&feed_id.into()).await
+        // Create a proper FeedId from the string
+        let feed_id = crate::models::feed::FeedId(feed_id.to_string());
+        self.rss_service.sync_feed(&feed_id).await
     }
 }

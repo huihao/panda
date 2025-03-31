@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use rusqlite::Connection;
 use chrono::{DateTime, Utc};
 use anyhow::Result;
@@ -9,11 +9,11 @@ use crate::models::category::CategoryId;
 use crate::base::repository::FeedRepository;
 
 pub struct SqliteFeedRepository {
-    connection: Arc<Connection>,
+    connection: Arc<Mutex<Connection>>,
 }
 
 impl SqliteFeedRepository {
-    pub fn new(connection: Arc<Connection>) -> Self {
+    pub fn new(connection: Arc<Mutex<Connection>>) -> Self {
         Self { connection }
     }
 
@@ -38,7 +38,7 @@ impl SqliteFeedRepository {
 #[async_trait]
 impl FeedRepository for SqliteFeedRepository {
     async fn get_feed_by_id(&self, id: &FeedId) -> Result<Option<Feed>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                     last_fetched_at, next_fetch_at, created_at, updated_at 
              FROM feeds 
@@ -54,22 +54,24 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn get_all_feeds(&self) -> Result<Vec<Feed>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                     last_fetched_at, next_fetch_at, created_at, updated_at 
              FROM feeds 
              ORDER BY title"
         )?;
 
-        let rows = stmt.query_map([], |row| self.map_row(row))?;
-        let feeds = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([], |row| Ok(self.map_row(row)))?;
+        let feeds = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(feeds)
     }
 
     async fn get_feeds_by_category(&self, category_id: &Option<CategoryId>) -> Result<Vec<Feed>> {
         let mut stmt = match category_id {
             Some(id) => {
-                self.connection.prepare(
+                self.connection.lock().unwrap().prepare(
                     "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                             last_fetched_at, next_fetch_at, created_at, updated_at 
                      FROM feeds 
@@ -78,7 +80,7 @@ impl FeedRepository for SqliteFeedRepository {
                 )?
             },
             None => {
-                self.connection.prepare(
+                self.connection.lock().unwrap().prepare(
                     "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                             last_fetched_at, next_fetch_at, created_at, updated_at 
                      FROM feeds 
@@ -88,18 +90,23 @@ impl FeedRepository for SqliteFeedRepository {
             }
         };
 
+        // Use the same row mapping closure for both query cases
+        let map_fn = |row| Ok(self.map_row(row));
+        
         let rows = if let Some(id) = category_id {
-            stmt.query_map([id.to_string()], |row| self.map_row(row))?
+            stmt.query_map([id.to_string()], map_fn)?
         } else {
-            stmt.query_map([], |row| self.map_row(row))?
+            stmt.query_map([], map_fn)?
         };
 
-        let feeds = rows.collect::<Result<Vec<_>>>()?;
+        let feeds = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(feeds)
     }
 
     async fn get_feeds_to_update(&self) -> Result<Vec<Feed>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                     last_fetched_at, next_fetch_at, created_at, updated_at 
              FROM feeds 
@@ -107,13 +114,15 @@ impl FeedRepository for SqliteFeedRepository {
         )?;
 
         let now = Utc::now();
-        let rows = stmt.query_map([now], |row| self.map_row(row))?;
-        let feeds = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([now], |row| Ok(self.map_row(row)))?;
+        let feeds = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(feeds)
     }
 
     async fn save_feed(&self, feed: &Feed) -> Result<()> {
-        self.connection.execute(
+        self.connection.lock().unwrap().execute(
             "INSERT INTO feeds (
                 id, category_id, title, url, status, error_message, icon_url, site_url,
                 last_fetched_at, next_fetch_at, created_at, updated_at
@@ -137,7 +146,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn update_feed(&self, feed: &Feed) -> Result<()> {
-        self.connection.execute(
+        self.connection.lock().unwrap().execute(
             "UPDATE feeds SET 
                 category_id = ?,
                 title = ?,
@@ -168,7 +177,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn delete_feed(&self, id: &FeedId) -> Result<()> {
-        self.connection.execute("DELETE FROM feeds WHERE id = ?", [id.to_string()])?;
+        self.connection.lock().unwrap().execute("DELETE FROM feeds WHERE id = ?", [id.to_string()])?;
         Ok(())
     }
 }

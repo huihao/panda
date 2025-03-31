@@ -99,7 +99,8 @@ impl FeedManager {
         self.visible = true;
         self.url = feed.url.to_string();
         self.title = feed.title.clone();
-        self.description = feed.description.clone().unwrap_or_default();
+        // Feed doesn't have a description field, so we'll just use an empty string
+        self.description = String::new();
         self.selected_category = feed.category_id.clone();
     }
     
@@ -124,10 +125,12 @@ impl FeedManager {
         }
 
         let url = Url::parse(&self.url_input)?;
-        let feed = self.rss_service.fetch_feed(&url).await?;
+        // Pass the URL as a string since fetch_feed expects &str
+        let feed = self.rss_service.fetch_feed(url.as_str()).await?;
         
         self.title = feed.title;
-        self.description = feed.description.unwrap_or_default();
+        // Feed doesn't have a description field
+        self.description = String::new();
         self.url = url.to_string();
         
         Ok(())

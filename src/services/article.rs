@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 use crate::models::article::{Article, ArticleId};
-use crate::data::ArticleRepository;
+use crate::base::repository::ArticleRepository;
 
 #[derive(Clone)]
 pub struct ArticleService {

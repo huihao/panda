@@ -1,5 +1,5 @@
 use anyhow::Result;
-use quick_xml::events::{BytesStart, Event};
+use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::Reader;
 use quick_xml::Writer;
 use url::Url;
@@ -87,7 +87,7 @@ impl OpmlService {
         
         // Write head element
         writer.write_event(Event::Start(BytesStart::new("head")))?;
-        writer.write_event(Event::End(BytesStart::new("head")))?;
+        writer.write_event(Event::End(BytesEnd::new("head")))?;
         
         // Write body element
         writer.write_event(Event::Start(BytesStart::new("body")))?;
@@ -108,8 +108,8 @@ impl OpmlService {
         }
         
         // Close body and opml elements
-        writer.write_event(Event::End(BytesStart::new("body")))?;
-        writer.write_event(Event::End(BytesStart::new("opml")))?;
+        writer.write_event(Event::End(BytesEnd::new("body")))?;
+        writer.write_event(Event::End(BytesEnd::new("opml")))?;
         
         let result = writer.into_inner().into_inner();
         Ok(String::from_utf8(result)?)

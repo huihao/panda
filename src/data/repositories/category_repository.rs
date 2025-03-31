@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use rusqlite::Connection;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -7,11 +7,11 @@ use crate::models::category::{Category, CategoryId};
 use crate::base::repository::CategoryRepository;
 
 pub struct SqliteCategoryRepository {
-    connection: Arc<Connection>,
+    connection: Arc<Mutex<Connection>>,
 }
 
 impl SqliteCategoryRepository {
-    pub fn new(connection: Arc<Connection>) -> Self {
+    pub fn new(connection: Arc<Mutex<Connection>>) -> Self {
         Self { connection }
     }
 
@@ -31,7 +31,7 @@ impl SqliteCategoryRepository {
 #[async_trait]
 impl CategoryRepository for SqliteCategoryRepository {
     async fn get_category_by_id(&self, id: &CategoryId) -> Result<Option<Category>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
              FROM categories 
              WHERE id = ?"
@@ -46,21 +46,23 @@ impl CategoryRepository for SqliteCategoryRepository {
     }
 
     async fn get_all_categories(&self) -> Result<Vec<Category>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
              FROM categories 
              ORDER BY name"
         )?;
 
-        let rows = stmt.query_map([], |row| self.map_row(row))?;
-        let categories = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([], |row| Ok(self.map_row(row)))?;
+        let categories = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(categories)
     }
 
     async fn get_categories_by_parent(&self, parent_id: &Option<CategoryId>) -> Result<Vec<Category>> {
         let mut stmt = match parent_id {
             Some(id) => {
-                self.connection.prepare(
+                self.connection.lock().unwrap().prepare(
                     "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
                      FROM categories 
                      WHERE parent_id = ? 
@@ -68,7 +70,7 @@ impl CategoryRepository for SqliteCategoryRepository {
                 )?
             },
             None => {
-                self.connection.prepare(
+                self.connection.lock().unwrap().prepare(
                     "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
                      FROM categories 
                      WHERE parent_id IS NULL 
@@ -77,44 +79,53 @@ impl CategoryRepository for SqliteCategoryRepository {
             }
         };
 
+        // Use the same row mapping closure for both query cases
+        let map_fn = |row| Ok(self.map_row(row));
+        
         let rows = if let Some(id) = parent_id {
-            stmt.query_map([id.to_string()], |row| self.map_row(row))?
+            stmt.query_map([id.to_string()], map_fn)?
         } else {
-            stmt.query_map([], |row| self.map_row(row))?
+            stmt.query_map([], map_fn)?
         };
 
-        let categories = rows.collect::<Result<Vec<_>>>()?;
+        let categories = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(categories)
     }
 
     async fn get_root_categories(&self) -> Result<Vec<Category>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
              FROM categories 
              WHERE parent_id IS NULL 
              ORDER BY name"
         )?;
 
-        let rows = stmt.query_map([], |row| self.map_row(row))?;
-        let categories = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([], |row| Ok(self.map_row(row)))?;
+        let categories = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(categories)
     }
 
     async fn get_child_categories(&self, parent_id: &CategoryId) -> Result<Vec<Category>> {
-        let mut stmt = self.connection.prepare(
+        let mut stmt = self.connection.lock().unwrap().prepare(
             "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
              FROM categories 
              WHERE parent_id = ? 
              ORDER BY name"
         )?;
 
-        let rows = stmt.query_map([parent_id.to_string()], |row| self.map_row(row))?;
-        let categories = rows.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([parent_id.to_string()], |row| Ok(self.map_row(row)))?;
+        let categories = rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(categories)
     }
 
     async fn save_category(&self, category: &Category) -> Result<()> {
-        self.connection.execute(
+        self.connection.lock().unwrap().execute(
             "INSERT INTO categories (
                 id, name, description, parent_id, is_expanded, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -132,7 +143,7 @@ impl CategoryRepository for SqliteCategoryRepository {
     }
 
     async fn update_category(&self, category: &Category) -> Result<()> {
-        self.connection.execute(
+        self.connection.lock().unwrap().execute(
             "UPDATE categories SET 
                 name = ?, 
                 description = ?,
@@ -153,7 +164,7 @@ impl CategoryRepository for SqliteCategoryRepository {
     }
 
     async fn delete_category(&self, id: &CategoryId) -> Result<()> {
-        self.connection.execute("DELETE FROM categories WHERE id = ?", [id.to_string()])?;
+        self.connection.lock().unwrap().execute("DELETE FROM categories WHERE id = ?", [id.to_string()])?;
         Ok(())
     }
 }

@@ -84,10 +84,13 @@ impl CategoryManager {
             return Err(anyhow::anyhow!("Name cannot be empty"));
         }
         
-        let category = Category::new(
-            self.name_input.clone(),
-            if self.description_input.is_empty() { None } else { Some(self.description_input.clone()) }
-        );
+        // Create a category with just the name, then add description if needed
+        let mut category = Category::new(self.name_input.clone());
+        
+        // Set description if provided
+        if !self.description_input.is_empty() {
+            category = category.with_description(self.description_input.clone());
+        }
         
         self.category_repository.save_category(&category)?;
         Ok(())

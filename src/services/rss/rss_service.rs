@@ -10,8 +10,7 @@ use feed_rs::model::Feed as FeedRs;
 
 use crate::models::article::{Article, ArticleId, ReadStatus};
 use crate::models::feed::{Feed, FeedId, FeedStatus};
-use crate::data::{ArticleRepository, FeedRepository};
-use crate::base::repository::{CategoryRepository, TagRepository};
+use crate::base::repository::{ArticleRepository, FeedRepository, CategoryRepository, TagRepository};
 use crate::models::category::{Category, CategoryId};
 use crate::models::tag::{Tag, TagId};
 
@@ -43,9 +42,9 @@ impl RssService {
 
     /// Fetches all feeds
     pub async fn fetch_all_feeds(&self) -> Result<()> {
-        let feeds = self.feed_repository.get_all_feeds()?;
+        let feeds = self.feed_repository.get_all_feeds().await?;
         for feed in feeds {
-            if let Err(e) = self.fetch_feed(&feed.id).await {
+            if let Err(e) = self.fetch_feed(feed.url.as_str()).await {
                 log::error!("Failed to fetch feed {}: {}", feed.title, e);
             }
         }
@@ -53,7 +52,7 @@ impl RssService {
     }
 
     pub async fn fetch_feed_by_id(&self, feed_id: &FeedId) -> Result<Feed> {
-        if let Some(feed) = self.feed_repository.get_feed_by_id(feed_id)? {
+        if let Some(feed) = self.feed_repository.get_feed_by_id(feed_id).await? {
             self.fetch_feed(feed.url.as_str()).await
         } else {
             Err(anyhow::anyhow!("Feed not found"))
@@ -130,19 +129,19 @@ impl RssService {
             url,
         );
 
-        self.feed_repository.save_feed(&feed)?;
+        self.feed_repository.save_feed(&feed).await?;
         Ok(())
     }
 
     /// Updates an existing feed
     pub async fn update_feed(&self, feed: &Feed) -> Result<()> {
-        self.feed_repository.save_feed(feed)?;
+        self.feed_repository.save_feed(feed).await?;
         Ok(())
     }
 
     /// Fetches new articles for all feeds that need to be updated
     pub async fn sync_all(&self) -> Result<()> {
-        let feeds = self.feed_repository.get_feeds_to_update()?;
+        let feeds = self.feed_repository.get_feeds_to_update().await?;
         
         for feed in feeds {
             match self.update_feed(&feed).await {
@@ -155,7 +154,7 @@ impl RssService {
                     failed_feed.update_status(FeedStatus::Error);
                     failed_feed.update_error_message(e.to_string());
                     failed_feed.update_fetch_times(Utc::now(), Utc::now() + chrono::Duration::hours(1));
-                    self.feed_repository.update_feed(&failed_feed)?;
+                    self.feed_repository.update_feed(&failed_feed).await?;
                 }
             }
         }
@@ -165,108 +164,101 @@ impl RssService {
 
     /// Gets all feeds in the repository
     pub async fn get_all_feeds(&self) -> Result<Vec<Feed>> {
-        Ok(self.feed_repository.get_all_feeds()?)
+        Ok(self.feed_repository.get_all_feeds().await?)
     }
 
     /// Gets all feeds in a category
-    pub async fn get_feeds_by_category(&self, category_id: &CategoryId) -> Result<Vec<Feed>> {
-        Ok(self.feed_repository.get_feeds_by_category(category_id)?)
+    pub async fn get_feeds_by_category(&self, category_id: &Option<CategoryId>) -> Result<Vec<Feed>> {
+        Ok(self.feed_repository.get_feeds_by_category(category_id).await?)
     }
 
     /// Gets all categories in the repository
     pub async fn get_all_categories(&self) -> Result<Vec<Category>> {
-        Ok(self.category_repository.get_all_categories()?)
+        Ok(self.category_repository.get_all_categories().await?)
     }
 
     /// Gets all articles in a feed
     pub async fn get_articles_by_feed(&self, feed_id: &FeedId) -> Result<Vec<Article>> {
-        Ok(self.article_repository.get_articles_by_feed(feed_id)?)
+        Ok(self.article_repository.get_articles_by_feed(feed_id).await?)
     }
 
     /// Gets all articles in a category
     pub async fn fetch_articles_by_category(&self, category_id: &CategoryId) -> Result<Vec<Article>> {
-        self.article_repository.get_articles_by_category(category_id)
+        self.article_repository.get_articles_by_category(category_id).await
     }
 
-    /// Gets all unread articles
     pub async fn get_unread_articles(&self) -> Result<Vec<Article>> {
-        Ok(self.article_repository.get_unread_articles()?)
+        Ok(self.article_repository.get_unread_articles().await?)
     }
 
-    /// Gets all favorited articles
     pub async fn get_favorite_articles(&self) -> Result<Vec<Article>> {
-        Ok(self.article_repository.get_favorite_articles()?)
+        Ok(self.article_repository.get_favorite_articles().await?)
     }
 
-    /// Searches for articles by title or content
     pub async fn search_articles(&self, query: &str) -> Result<Vec<Article>> {
-        self.article_repository.search_articles(query)
+        self.article_repository.search_articles(query).await
     }
 
-    /// Gets articles by date range
     pub async fn fetch_articles_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Article>> {
-        self.article_repository.get_articles_by_date_range(start, end)
+        self.article_repository.get_articles_by_date_range(start, end).await
     }
 
-    /// Deletes a feed and all its articles
     pub async fn delete_feed(&self, feed_id: &FeedId) -> Result<()> {
-        self.feed_repository.delete_feed(feed_id)?;
+        self.feed_repository.delete_feed(feed_id).await?;
         Ok(())
     }
 
     pub async fn get_feed_by_id(&self, feed_id: &FeedId) -> Result<Option<Feed>> {
-        Ok(self.feed_repository.get_feed_by_id(feed_id)?)
+        Ok(self.feed_repository.get_feed_by_id(feed_id).await?)
     }
 
-    /// Gets an article by ID
     pub async fn get_article(&self, article_id: &ArticleId) -> Result<Option<Article>> {
-        self.article_repository.get_article(article_id)
+        self.article_repository.get_article(article_id).await
     }
 
-    /// Gets all articles
     pub async fn get_all_articles(&self) -> Result<Vec<Article>> {
-        self.article_repository.get_all_articles()
+        self.article_repository.get_all_articles().await
     }
 
     pub async fn get_category_by_id(&self, category_id: &CategoryId) -> Result<Option<Category>> {
-        Ok(self.category_repository.get_category_by_id(category_id)?)
+        Ok(self.category_repository.get_category_by_id(category_id).await?)
     }
 
     pub async fn get_categories_by_parent(&self, parent_id: &CategoryId) -> Result<Vec<Category>> {
-        Ok(self.category_repository.get_categories_by_parent(parent_id)?)
+        Ok(self.category_repository.get_categories_by_parent(parent_id).await?)
     }
 
     pub async fn get_root_categories(&self) -> Result<Vec<Category>> {
-        Ok(self.category_repository.get_root_categories()?)
+        Ok(self.category_repository.get_root_categories().await?)
     }
 
     pub async fn get_child_categories(&self, parent_id: &CategoryId) -> Result<Vec<Category>> {
-        Ok(self.category_repository.get_child_categories(parent_id)?)
+        Ok(self.category_repository.get_child_categories(parent_id).await?)
     }
 
     pub async fn search_categories(&self, name: &str) -> Result<Vec<Category>> {
-        Ok(self.category_repository.search_categories(name)?)
+        Ok(self.category_repository.search_categories(name).await?)
     }
 
     pub async fn get_recently_updated_categories(&self, limit: usize) -> Result<Vec<Category>> {
-        Ok(self.category_repository.get_recently_updated_categories(limit)?)
+        Ok(self.category_repository.get_recently_updated_categories(limit).await?)
     }
 
     pub async fn save_category(&self, category: &Category) -> Result<()> {
-        Ok(self.category_repository.save_category(category)?)
+        Ok(self.category_repository.save_category(category).await?)
     }
 
     pub async fn update_category(&self, category: &Category) -> Result<()> {
-        Ok(self.category_repository.update_category(category)?)
+        Ok(self.category_repository.update_category(category).await?)
     }
 
     pub async fn delete_category(&self, category_id: &CategoryId) -> Result<()> {
-        Ok(self.category_repository.delete_category(category_id)?)
+        Ok(self.category_repository.delete_category(category_id).await?)
     }
 
     /// Gets articles by tag
     pub async fn get_articles_by_tag(&self, tag_id: &TagId) -> Result<Vec<Article>> {
-        self.article_repository.get_articles_by_tag(tag_id)
+        self.article_repository.get_articles_by_tag(tag_id).await
     }
 
     /// Syncs a feed
@@ -277,7 +269,7 @@ impl RssService {
 
     /// Syncs all feeds
     pub async fn sync_all_feeds(&self) -> Result<()> {
-        let feeds = self.feed_repository.get_feeds_to_update()?;
+        let feeds = self.feed_repository.get_feeds_to_update().await?;
         for feed in feeds {
             if let Err(e) = self.sync_feed(&feed.id).await {
                 log::error!("Failed to sync feed {}: {}", feed.id, e);

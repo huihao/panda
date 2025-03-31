@@ -8,6 +8,7 @@ pub struct AppColors {
     pub background: Color32,
     pub background_highlight: Color32,
     pub accent: Color32,
+    pub error: Color32,
 }
 
 impl Default for AppColors {
@@ -19,6 +20,7 @@ impl Default for AppColors {
             background: Color32::from_rgb(30, 30, 30),
             background_highlight: Color32::from_rgb(45, 45, 45),
             accent: Color32::from_rgb(0, 120, 215),
+            error: Color32::from_rgb(255, 85, 85),
         }
     }
 }
