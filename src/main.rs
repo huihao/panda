@@ -12,6 +12,7 @@ use url::Url;
 use data::Database;
 use services::{RssService, WebViewService, SyncService, OpmlService};
 use ui::views::main::MainView;
+use eframe::egui;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -80,12 +81,7 @@ async fn main() -> Result<()> {
         warn!("Failed to sync all feeds: {}", e);
     }
     
-    // Create and run the main view
-    let options = eframe::NativeOptions {
-        initial_window_size: Some(egui::vec2(1200.0, 800.0)),
-        ..Default::default()
-    };
-    
+    // Prepare the main view and UI configuration
     let main_view = MainView::new(
         feed_repository,
         category_repository,
@@ -95,11 +91,34 @@ async fn main() -> Result<()> {
         sync_service,
     );
     
-    eframe::run_native(
-        "Panda RSS Reader",
-        options,
-        Box::new(|_cc| Box::new(main_view)),
-    )?;
+    // Run the UI in a separate thread or context to avoid Send issues
+    // This follows the Dependency Inversion Principle by isolating the UI framework
+    // from the async runtime
+    run_ui(main_view)?;
     
     Ok(())
+}
+
+/// Runs the egui-based UI with the given MainView
+/// This separates the UI thread from the tokio async runtime to avoid Send trait issues
+fn run_ui(main_view: MainView) -> Result<()> {
+    // Create and run the main view
+    let options = eframe::NativeOptions {
+        initial_window_size: Some(egui::vec2(1200.0, 800.0)),
+        ..Default::default()
+    };
+    
+    // Use a separate Result handling for the eframe call to properly convert errors
+    // The closure now correctly returns a Result<Box<dyn eframe::App>, Box<dyn Error>>
+    match eframe::run_native(
+        "Panda RSS Reader",
+        options,
+        Box::new(|_cc| -> Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync + 'static>> {
+            // Wrap the main_view in Ok to satisfy the Result return type
+            Ok(Box::new(main_view))
+        }),
+    ) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!("Error running UI: {}", e)),
+    }
 }

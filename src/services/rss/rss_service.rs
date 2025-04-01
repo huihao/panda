@@ -171,11 +171,7 @@ impl RssService {
     pub async fn get_feeds_by_category(&self, category_id: &Option<CategoryId>) -> Result<Vec<Feed>> {
         match category_id {
             Some(id) => Ok(self.feed_repository.get_feeds_by_category(id).await?),
-            None => {
-                // 如果没有分类ID，则返回所有无分类的Feed
-                // 可以添加一个特定的方法来处理这种情况，或者使用其他方法获取
-                Ok(self.feed_repository.get_all_feeds().await?)
-            }
+            None => Ok(self.feed_repository.get_all_feeds().await?)
         }
     }
 
@@ -267,11 +263,31 @@ impl RssService {
 
     /// Gets articles by tag
     pub async fn get_articles_by_tag(&self, tag_id: &TagId) -> Result<Vec<Article>> {
-        // 获取标签名称
-        if let Some(tag) = self.tag_repository.get_tag_by_id(tag_id).await? {
-            self.article_repository.get_articles_by_tag(&tag.name).await
-        } else {
-            Ok(vec![]) // 如果标签不存在，返回空数组
+        // Get the tag ID as a string
+        let tag_id_str = tag_id.to_string();
+        
+        // Option 1: Try to get the tag by name (using the tag ID string)
+        // This might work if TagId.to_string() returns the tag name or if tags can be retrieved by ID string
+        match self.tag_repository.get_tag_by_name(&tag_id_str).await {
+            Ok(Some(tag)) => {
+                // If we found the tag, use its name to get articles
+                return self.article_repository.get_articles_by_tag(&tag.name).await;
+            },
+            _ => {
+                // Option 2: Use the articles_with_tag method that returns article IDs
+                let article_ids = self.tag_repository.get_articles_with_tag(tag_id).await?;
+                
+                // Fetch each article by ID
+                let mut articles = Vec::new();
+                for id_str in article_ids {
+                    let article_id = ArticleId(id_str);
+                    if let Ok(Some(article)) = self.article_repository.get_article(&article_id).await {
+                        articles.push(article);
+                    }
+                }
+                
+                Ok(articles)
+            }
         }
     }
 

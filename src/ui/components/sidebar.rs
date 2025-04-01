@@ -3,7 +3,7 @@ use std::sync::Arc;
 use log::error;
 use anyhow::Result;
 
-use crate::base::repository_traits::{FeedRepository, CategoryRepository};
+use crate::base::repository::{FeedRepository, CategoryRepository};
 use crate::models::category::{Category, CategoryId};
 use crate::models::feed::Feed;
 use crate::ui::styles::{AppColors, DEFAULT_PADDING};
@@ -55,6 +55,7 @@ impl Sidebar {
 
     pub fn ui(&mut self, ui: &mut Ui) -> Result<Option<SidebarSelection>> {
         let mut new_selection = None;
+        let mut render_error: Option<anyhow::Error> = None;
 
         // Search box
         ui.horizontal(|ui| {
@@ -79,17 +80,54 @@ impl Sidebar {
 
         // Categories and feeds
         ScrollArea::vertical().show(ui, |ui| {
-            // 修复：移除错误处理符号，在闭包中直接处理错误
-            if let Err(e) = self.render_categories(ui, None, 0, &mut new_selection) {
-                error!("Failed to render categories: {}", e);
+            // Handle error inside the closure without using ? operator
+            match self.render_categories(ui, None, 0, &mut new_selection) {
+                Ok(_) => {},
+                Err(err) => {
+                    // Display an error message to the user first
+                    let error_message = format!("Error loading categories: {}", err);
+                    ui.label(RichText::new(error_message)
+                        .color(egui::Color32::from_rgb(255, 80, 80)));
+                        
+                    // Store the error to be handled outside the closure
+                    render_error = Some(err);
+                }
             }
         });
+        
+        // Propagate any error that occurred during rendering
+        if let Some(err) = render_error {
+            return Err(err);
+        }
 
         if let Some(selection) = new_selection.clone() {
             self.state.selection = Some(selection);
         }
 
         Ok(new_selection)
+    }
+
+    /// Helper method to get feeds by category ID that properly handles the None case
+    /// This follows the Adapter pattern to convert between incompatible interfaces
+    async fn get_feeds_for_category(&self, category_id_opt: &Option<CategoryId>) -> Result<Vec<Feed>> {
+        match category_id_opt {
+            Some(category_id) => {
+                // When we have a category ID, use it directly
+                self.feed_repository.get_feeds_by_category(category_id).await
+            },
+            None => {
+                // For uncategorized feeds, we need to fetch all feeds first and filter
+                // This is a workaround since the repository API doesn't directly support this case
+                let all_feeds = self.feed_repository.get_all_feeds().await?;
+                
+                // Filter to only include feeds without a category
+                let uncategorized_feeds = all_feeds.into_iter()
+                    .filter(|feed| feed.category_id.is_none())
+                    .collect();
+                
+                Ok(uncategorized_feeds)
+            }
+        }
     }
 
     fn render_categories(
@@ -100,7 +138,6 @@ impl Sidebar {
         selection: &mut Option<SidebarSelection>
     ) -> Result<()> {
         // Use tokio::task::block_in_place to handle the async call synchronously
-        // This is not ideal for production but will work for our immediate fix
         let categories = tokio::task::block_in_place(|| {
             let rt = tokio::runtime::Handle::current();
             rt.block_on(async {
@@ -118,12 +155,12 @@ impl Sidebar {
 
             // Only show feeds for expanded categories
             if self.state.expanded_categories.contains(&category.id) {
-                // 修复：获取对应分类的Feed，修复类型不匹配问题
+                // Use our adapter method through tokio::task::block_in_place
                 let feeds = tokio::task::block_in_place(|| {
                     let rt = tokio::runtime::Handle::current();
                     rt.block_on(async {
-                        // 直接使用category.id而不是包装在Option中
-                        self.feed_repository.get_feeds_by_category(&category.id).await
+                        // Use our new helper method with Some(category.id)
+                        self.get_feeds_for_category(&Some(category.id.clone())).await
                     })
                 })?;
                 
@@ -135,20 +172,17 @@ impl Sidebar {
 
         // Show uncategorized feeds at root level
         if parent_id.is_none() {
-            // 修复：获取所有Feed，使用更合适的方法
+            // Use our adapter method through tokio::task::block_in_place
             let feeds = tokio::task::block_in_place(|| {
                 let rt = tokio::runtime::Handle::current();
                 rt.block_on(async {
-                    // 使用get_all_feeds方法而不是试图用None作为category_id
-                    self.feed_repository.get_all_feeds().await
+                    // Use our new helper method with None
+                    self.get_feeds_for_category(&None).await
                 })
             })?;
             
             for feed in feeds {
-                // 仅显示没有分类的Feed
-                if feed.category_id.is_none() {
-                    self.render_feed(ui, &feed, depth, selection)?;
-                }
+                self.render_feed(ui, &feed, depth, selection)?;
             }
         }
 

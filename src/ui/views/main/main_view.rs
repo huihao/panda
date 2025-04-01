@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use egui::{Button, Context, TopBottomPanel, RichText, Color32};
+use egui::{Button, Context, TopBottomPanel, RichText, Color32, CentralPanel, SidePanel};
 use tokio::runtime::Runtime;
 use crate::ui::AppContext;
 use crate::models::category::CategoryId;
@@ -8,6 +8,7 @@ use crate::ui::components::*;
 use crate::ui::styles::AppColors;
 use std::time::{Duration, Instant};
 use anyhow::Result;
+use eframe::App;
 
 pub struct MainView {
     app_context: AppContext,
@@ -134,5 +135,64 @@ impl MainView {
 
     pub fn select_category(&mut self, category_id: CategoryId) {
         self.sidebar.select_category(category_id);
+    }
+}
+
+impl App for MainView {
+    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // Use the existing update method and handle any errors
+        if let Err(e) = self.update(ctx) {
+            // Log error or show in UI
+            eprintln!("Error in update: {}", e);
+            self.set_status_message(format!("Error: {}", e));
+        }
+        
+        // Set up main UI layout
+        SidePanel::left("sidebar_panel").show(ctx, |ui| {
+            if let Err(e) = self.sidebar.ui(ui) {
+                eprintln!("Error rendering sidebar: {}", e);
+            }
+        });
+
+        // Main content area - only one CentralPanel should exist
+        CentralPanel::default().show(ctx, |ui| {
+            // Depending on what's selected in the sidebar, show either article list or article
+            if self.selected_article.is_some() {
+                if let Err(e) = self.article_viewer.ui(ui) {
+                    eprintln!("Error rendering article viewer: {}", e);
+                }
+            } else {
+                if let Err(e) = self.article_list.ui(ui) {
+                    eprintln!("Error rendering article list: {}", e);
+                }
+            }
+            
+            // Also allow the feed manager to show itself if needed
+            // It manages its own Window internally so we just pass the UI context
+            if let Err(e) = self.feed_manager.show(ui) {
+                eprintln!("Error rendering feed manager: {}", e);
+            }
+        });
+        
+        // Render settings dialog if visible
+        if self.show_settings {
+            if let Err(e) = self.settings_dialog.show(ctx) {
+                eprintln!("Error rendering settings dialog: {}", e);
+            }
+        }
+        
+        // Render category manager dialog if visible
+        // Fix: Wrap the category_manager.show call in a Window to provide a UI context
+        if self.show_categories {
+            // Create a temporary window to provide a UI context for the category manager
+            egui::Window::new("Category Manager")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    if let Err(e) = self.category_manager.show(ui) {
+                        eprintln!("Error rendering category manager: {}", e);
+                    }
+                });
+        }
     }
 }

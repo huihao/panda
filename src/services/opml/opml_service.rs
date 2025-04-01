@@ -37,7 +37,6 @@ impl OpmlService {
                     if e.name().as_ref() == b"outline" {
                         if let Some(outline) = self.parse_outline(&e) {
                             if let Some(xml_url) = outline.xml_url {
-                                // 创建Feed时不再调用with_description和with_language，因为这些方法并不改变Feed的状态
                                 let feed = Feed::new(
                                     outline.text,
                                     Url::parse(&xml_url)?
@@ -57,60 +56,26 @@ impl OpmlService {
         Ok(feeds)
     }
 
-    fn parse_outline(&self, e: &BytesStart) -> Option<OpmlOutline> {
+    fn parse_outline(&self, element: &BytesStart) -> Option<OpmlOutline> {
         let mut text = None;
-        let mut html_url = None;
         let mut xml_url = None;
-
-        for attr in e.attributes().flatten() {
-            match attr.key.as_ref() {
-                b"text" => text = String::from_utf8(attr.value.into_owned()).ok(),
-                b"htmlUrl" => html_url = String::from_utf8(attr.value.into_owned()).ok(),
-                b"xmlUrl" => xml_url = String::from_utf8(attr.value.into_owned()).ok(),
-                _ => (),
+        let mut html_url = None;
+        
+        for attr in element.attributes() {
+            if let Ok(attr) = attr {
+                match attr.key.as_ref() {
+                    b"text" => text = String::from_utf8(attr.value.to_vec()).ok(),
+                    b"xmlUrl" => xml_url = String::from_utf8(attr.value.to_vec()).ok(),
+                    b"htmlUrl" => html_url = String::from_utf8(attr.value.to_vec()).ok(),
+                    _ => (),
+                }
             }
         }
-
-        text.map(|text| OpmlOutline {
-            text,
-            html_url,
+        
+        text.map(|t| OpmlOutline {
+            text: t,
             xml_url,
+            html_url,
         })
-    }
-
-    pub fn export_opml(&self, feeds: &[Feed]) -> Result<String> {
-        let mut writer = Writer::new(Cursor::new(Vec::new()));
-        
-        // Write XML declaration and root element
-        writer.write_event(Event::Start(BytesStart::new("opml")))?;
-        
-        // Write head element
-        writer.write_event(Event::Start(BytesStart::new("head")))?;
-        writer.write_event(Event::End(BytesEnd::new("head")))?;
-        
-        // Write body element
-        writer.write_event(Event::Start(BytesStart::new("body")))?;
-        
-        // Write feeds
-        for feed in feeds {
-            let mut outline = BytesStart::new("outline");
-            outline.extend_attributes(vec![
-                ("text", feed.title.as_str()),
-                ("xmlUrl", feed.url.as_str()),
-            ].into_iter());
-            
-            if let Some(site_url) = &feed.site_url {
-                outline.extend_attributes(vec![("htmlUrl", site_url.as_str())]);
-            }
-            
-            writer.write_event(Event::Empty(outline))?;
-        }
-        
-        // Close body and opml elements
-        writer.write_event(Event::End(BytesEnd::new("body")))?;
-        writer.write_event(Event::End(BytesEnd::new("opml")))?;
-        
-        let result = writer.into_inner().into_inner();
-        Ok(String::from_utf8(result)?)
     }
 }

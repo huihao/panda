@@ -32,54 +32,35 @@ impl SettingsDialog {
             return Ok(());
         }
 
-        // 修复借用冲突：使用临时变量保存self.show的值
-        let mut dialog_open = self.show;
-        Window::new("Settings")
-            .open(&mut dialog_open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                self.ui_content(ui)
-            });
+        // Create local mutable copies of the state we need to modify
+        let mut sync_interval = self.sync_interval;
+        let mut article_retention_days = self.article_retention_days;
+        let colors = &self.colors; // Reference instead of clone
         
-        // 更新show字段
-        self.show = dialog_open;
-
-        Ok(())
-    }
-
-    fn ui_content(&mut self, ui: &mut Ui) -> Result<()> {
-        ui.vertical(|ui| {
-            ui.heading(RichText::new("Sync Settings").color(self.colors.text_highlight));
-            ui.add_space(8.0);
-
-            ui.horizontal(|ui| {
-                ui.label("Sync Interval (minutes):");
-                ui.add(egui::DragValue::new(&mut self.sync_interval)
-                    .clamp_range(15..=1440));
-            });
-
-            ui.add_space(16.0);
-            ui.heading(RichText::new("Article Settings").color(self.colors.text_highlight));
-            ui.add_space(8.0);
-
-            ui.horizontal(|ui| {
-                ui.label("Article Retention (days):");
-                ui.add(egui::DragValue::new(&mut self.article_retention_days)
-                    .clamp_range(1..=365));
-            });
-
-            ui.add_space(16.0);
-
-            if ui.button("Save Changes").clicked() {
-                // Handle the Result directly instead of using the ? operator
-                if let Err(e) = self.save_settings() {
-                    eprintln!("Error saving settings: {}", e);
-                    // Optionally show error to the user via UI
-                } else {
-                    self.show = false;
-                }
-            }
+        // Step 1: Create the window but capture its response instead of chaining
+        let window = Window::new("Settings")
+            .open(&mut self.show)  // Use self.show directly here
+            .resizable(false);
+            
+        // Step 2: Show the window and handle UI content
+        let response = window.show(ctx, |ui| {
+            // Pass individual fields instead of self (no show reference here)
+            ui_content(ui, colors, &mut sync_interval, &mut article_retention_days)
         });
+
+        // Step 3: Update struct fields with any changes from the UI
+        let changed = self.sync_interval != sync_interval || 
+                      self.article_retention_days != article_retention_days;
+        
+        self.sync_interval = sync_interval;
+        self.article_retention_days = article_retention_days;
+        
+        // If the dialog was closed and values changed, save settings
+        if !self.show && changed {
+            if let Err(e) = self.save_settings() {
+                eprintln!("Error saving settings: {}", e);
+            }
+        }
 
         Ok(())
     }
@@ -100,4 +81,43 @@ impl SettingsDialog {
     pub fn close(&mut self) {
         self.show = false;
     }
+}
+
+// Define the UI rendering function as a free function instead of a method
+fn ui_content(
+    ui: &mut Ui, 
+    colors: &AppColors, 
+    sync_interval: &mut i32, 
+    article_retention_days: &mut i32,
+) -> Result<()> {
+    ui.vertical(|ui| {
+        ui.heading(RichText::new("Sync Settings").color(colors.text_highlight));
+        ui.add_space(8.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Sync Interval (minutes):");
+            ui.add(egui::DragValue::new(sync_interval)
+                .clamp_range(15..=1440));
+        });
+
+        ui.add_space(16.0);
+        ui.heading(RichText::new("Article Settings").color(colors.text_highlight));
+        ui.add_space(8.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Article Retention (days):");
+            ui.add(egui::DragValue::new(article_retention_days)
+                .clamp_range(1..=365));
+        });
+
+        ui.add_space(16.0);
+
+        // The save button sets a close flag in egui that will be handled by the window
+        if ui.button("Save Changes").clicked() {
+            // Return true to indicate we want to close the dialog
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    });
+
+    Ok(())
 }
