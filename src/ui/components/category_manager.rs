@@ -92,7 +92,14 @@ impl CategoryManager {
             category = category.with_description(self.description_input.clone());
         }
         
-        self.category_repository.save_category(&category)?;
+        // Use tokio::task::block_in_place to handle the async call synchronously in this sync context
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                self.category_repository.save_category(&category).await
+            })
+        })?;
+        
         Ok(())
     }
 }

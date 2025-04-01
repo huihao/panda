@@ -3,7 +3,7 @@ use std::sync::Arc;
 use log::error;
 use anyhow::Result;
 
-use crate::base::repository::{FeedRepository, CategoryRepository};
+use crate::base::repository_traits::{FeedRepository, CategoryRepository};
 use crate::models::category::{Category, CategoryId};
 use crate::models::feed::Feed;
 use crate::ui::styles::{AppColors, DEFAULT_PADDING};
@@ -79,7 +79,10 @@ impl Sidebar {
 
         // Categories and feeds
         ScrollArea::vertical().show(ui, |ui| {
-            self.render_categories(ui, None, 0, &mut new_selection)?;
+            // 修复：移除错误处理符号，在闭包中直接处理错误
+            if let Err(e) = self.render_categories(ui, None, 0, &mut new_selection) {
+                error!("Failed to render categories: {}", e);
+            }
         });
 
         if let Some(selection) = new_selection.clone() {
@@ -96,7 +99,14 @@ impl Sidebar {
         depth: i32,
         selection: &mut Option<SidebarSelection>
     ) -> Result<()> {
-        let categories = self.category_repository.get_categories_by_parent(&parent_id)?;
+        // Use tokio::task::block_in_place to handle the async call synchronously
+        // This is not ideal for production but will work for our immediate fix
+        let categories = tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                self.category_repository.get_categories_by_parent(&parent_id).await
+            })
+        })?;
         
         for category in categories {
             let indent = "  ".repeat(depth as usize);
@@ -108,7 +118,15 @@ impl Sidebar {
 
             // Only show feeds for expanded categories
             if self.state.expanded_categories.contains(&category.id) {
-                let feeds = self.feed_repository.get_feeds_by_category(&Some(category.id.clone()))?;
+                // 修复：获取对应分类的Feed，修复类型不匹配问题
+                let feeds = tokio::task::block_in_place(|| {
+                    let rt = tokio::runtime::Handle::current();
+                    rt.block_on(async {
+                        // 直接使用category.id而不是包装在Option中
+                        self.feed_repository.get_feeds_by_category(&category.id).await
+                    })
+                })?;
+                
                 for feed in feeds {
                     self.render_feed(ui, &feed, depth + 1, selection)?;
                 }
@@ -117,9 +135,20 @@ impl Sidebar {
 
         // Show uncategorized feeds at root level
         if parent_id.is_none() {
-            let feeds = self.feed_repository.get_feeds_by_category(&None)?;
+            // 修复：获取所有Feed，使用更合适的方法
+            let feeds = tokio::task::block_in_place(|| {
+                let rt = tokio::runtime::Handle::current();
+                rt.block_on(async {
+                    // 使用get_all_feeds方法而不是试图用None作为category_id
+                    self.feed_repository.get_all_feeds().await
+                })
+            })?;
+            
             for feed in feeds {
-                self.render_feed(ui, &feed, depth, selection)?;
+                // 仅显示没有分类的Feed
+                if feed.category_id.is_none() {
+                    self.render_feed(ui, &feed, depth, selection)?;
+                }
             }
         }
 
@@ -160,8 +189,15 @@ impl Sidebar {
     }
 
     pub fn select_category(&mut self, category_id: CategoryId) {
-        let conn = self.category_repository.get_category_by_id(&category_id).ok().flatten();
-        if let Ok(Some(category)) = conn {
+        // Use tokio::task::block_in_place to handle the async call
+        let category = tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                self.category_repository.get_category_by_id(&category_id).await
+            })
+        });
+        
+        if let Ok(Some(category)) = category {
             self.state.selection = Some(SidebarSelection::Category(category));
         }
     }

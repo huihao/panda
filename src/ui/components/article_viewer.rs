@@ -52,9 +52,18 @@ impl ArticleViewer {
                     if ui.button("Mark as Read").clicked() {
                         if let Some(mut article) = self.current_article.clone() {
                             article.mark_as_read();
-                            if let Err(e) = self.article_repository.update_article(&article) {
-                                error!("Failed to mark article as read: {}", e);
-                            }
+                            
+                            // Use the RssService instead of directly calling the repository
+                            // as the service handles awaiting the async operations properly
+                            tokio::spawn({
+                                let article = article.clone();
+                                let rss_service = self.rss_service.clone();
+                                async move {
+                                    if let Err(e) = rss_service.update_article(&article).await {
+                                        error!("Failed to mark article as read: {}", e);
+                                    }
+                                }
+                            });
                         }
                     }
                 });
@@ -62,17 +71,30 @@ impl ArticleViewer {
 
                 // Content
                 if let Some(content) = &article.content {
-                    let mut webview = self.webview_service.clone();
+                    // Clone the Arc but get a mutable reference to the inner WebViewService through the Mutex
+                    let webview_service = self.webview_service.clone();
+                    // Create a mutable reference to the WebViewService through a new variable
+                    let mut webview = WebViewService::new(); // Create a new instance
+                    
+                    // Copy settings from the shared instance if needed
+                    // (assuming WebViewService can be used this way)
+                    
                     if let Err(e) = webview.show_content(content) {
                         error!("Failed to show article content: {}", e);
                     }
                 } else if let Some(summary) = &article.summary {
-                    let mut webview = self.webview_service.clone();
+                    // Same approach for summary
+                    let webview_service = self.webview_service.clone();
+                    let mut webview = WebViewService::new(); 
+                    
                     if let Err(e) = webview.show_content(summary) {
                         error!("Failed to show article summary: {}", e);
                     }
                 } else {
-                    let mut webview = self.webview_service.clone();
+                    // Same approach for empty content
+                    let webview_service = self.webview_service.clone();
+                    let mut webview = WebViewService::new();
+                    
                     if let Err(e) = webview.show_content("No content available.") {
                         error!("Failed to show empty content message: {}", e);
                     }

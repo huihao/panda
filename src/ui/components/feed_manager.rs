@@ -9,7 +9,7 @@ use crate::models::feed::{Feed, FeedId, FeedStatus};
 use crate::models::category::{Category, CategoryId};
 use crate::services::rss::RssService;
 use crate::ui::styles::{AppColors, DEFAULT_PADDING};
-use crate::base::repository::FeedRepository;
+use crate::base::repository_traits::FeedRepository;
 
 /// Feed management dialog component
 pub struct FeedManager {
@@ -63,7 +63,13 @@ impl FeedManager {
                         
                         ui.horizontal(|ui| {
                             if ui.button("Add").clicked() {
-                                if let Err(e) = self.add_feed() {
+                                // 使用tokio::task::block_in_place在UI线程中调用异步方法
+                                if let Err(e) = tokio::task::block_in_place(|| {
+                                    let rt = tokio::runtime::Handle::current();
+                                    rt.block_on(async {
+                                        self.add_feed().await
+                                    })
+                                }) {
                                     error!("Failed to add feed: {}", e);
                                     self.error_message = Some(e.to_string());
                                 } else {

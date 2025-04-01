@@ -1,18 +1,3 @@
-use std::sync::{Arc, Mutex};
-use anyhow::Result;
-use wry::{WebView, WebViewBuilder};
-
-pub struct WebViewService {
-    webview: Arc<Mutex<Option<WebView>>>,
-}
-
-impl WebViewService {
-    pub fn new() -> Self {
-        Self {
-            webview: Arc::new(Mutex::new(None)),
-        }
-    }
-
     pub fn show_content(&mut self, content: &str) -> Result<()> {
         let html = format!(
             r#"
@@ -52,10 +37,12 @@ impl WebViewService {
 
         let mut webview = self.webview.lock().unwrap();
         if webview.is_none() {
+            // 修复：WebViewBuilder的方法链式调用，移除?操作符
             *webview = Some(
                 WebViewBuilder::new()
-                    .with_title("Article Viewer")
-                    .with_html(html)?
+                    .with_url("about:blank")
+                    .with_html(html)
+                    .with_initialization_script("document.title = 'Article Viewer';")
                     .build()?
             );
         } else if let Some(view) = webview.as_mut() {
@@ -64,13 +51,3 @@ impl WebViewService {
 
         Ok(())
     }
-
-    pub fn hide(&mut self) {
-        let mut webview = self.webview.lock().unwrap();
-        *webview = None;
-    }
-
-    pub fn is_visible(&self) -> bool {
-        self.webview.lock().unwrap().is_some()
-    }
-}

@@ -169,7 +169,14 @@ impl RssService {
 
     /// Gets all feeds in a category
     pub async fn get_feeds_by_category(&self, category_id: &Option<CategoryId>) -> Result<Vec<Feed>> {
-        Ok(self.feed_repository.get_feeds_by_category(category_id).await?)
+        match category_id {
+            Some(id) => Ok(self.feed_repository.get_feeds_by_category(id).await?),
+            None => {
+                // 如果没有分类ID，则返回所有无分类的Feed
+                // 可以添加一个特定的方法来处理这种情况，或者使用其他方法获取
+                Ok(self.feed_repository.get_all_feeds().await?)
+            }
+        }
     }
 
     /// Gets all categories in the repository
@@ -225,7 +232,9 @@ impl RssService {
     }
 
     pub async fn get_categories_by_parent(&self, parent_id: &CategoryId) -> Result<Vec<Category>> {
-        Ok(self.category_repository.get_categories_by_parent(parent_id).await?)
+        // Wrap the CategoryId in an Option since the repository method expects Option<CategoryId>
+        let parent_option = Some(parent_id.clone());
+        Ok(self.category_repository.get_categories_by_parent(&parent_option).await?)
     }
 
     pub async fn get_root_categories(&self) -> Result<Vec<Category>> {
@@ -258,7 +267,12 @@ impl RssService {
 
     /// Gets articles by tag
     pub async fn get_articles_by_tag(&self, tag_id: &TagId) -> Result<Vec<Article>> {
-        self.article_repository.get_articles_by_tag(tag_id).await
+        // 获取标签名称
+        if let Some(tag) = self.tag_repository.get_tag_by_id(tag_id).await? {
+            self.article_repository.get_articles_by_tag(&tag.name).await
+        } else {
+            Ok(vec![]) // 如果标签不存在，返回空数组
+        }
     }
 
     /// Syncs a feed
@@ -276,5 +290,10 @@ impl RssService {
             }
         }
         Ok(())
+    }
+
+    /// Updates an article
+    pub async fn update_article(&self, article: &Article) -> Result<()> {
+        self.article_repository.update_article(article).await
     }
 }

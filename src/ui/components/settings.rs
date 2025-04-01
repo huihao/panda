@@ -32,12 +32,17 @@ impl SettingsDialog {
             return Ok(());
         }
 
+        // 修复借用冲突：使用临时变量保存self.show的值
+        let mut dialog_open = self.show;
         Window::new("Settings")
-            .open(&mut self.show)
+            .open(&mut dialog_open)
             .resizable(false)
             .show(ctx, |ui| {
                 self.ui_content(ui)
             });
+        
+        // 更新show字段
+        self.show = dialog_open;
 
         Ok(())
     }
@@ -66,8 +71,13 @@ impl SettingsDialog {
             ui.add_space(16.0);
 
             if ui.button("Save Changes").clicked() {
-                self.save_settings()?;
-                self.show = false;
+                // Handle the Result directly instead of using the ? operator
+                if let Err(e) = self.save_settings() {
+                    eprintln!("Error saving settings: {}", e);
+                    // Optionally show error to the user via UI
+                } else {
+                    self.show = false;
+                }
             }
         });
 

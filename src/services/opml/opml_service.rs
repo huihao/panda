@@ -37,12 +37,11 @@ impl OpmlService {
                     if e.name().as_ref() == b"outline" {
                         if let Some(outline) = self.parse_outline(&e) {
                             if let Some(xml_url) = outline.xml_url {
+                                // 创建Feed时不再调用with_description和with_language，因为这些方法并不改变Feed的状态
                                 let feed = Feed::new(
                                     outline.text,
                                     Url::parse(&xml_url)?
-                                )
-                                .with_description(None)
-                                .with_language(None);
+                                );
                                 feeds.push(feed);
                             }
                         }
