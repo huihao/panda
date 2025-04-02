@@ -3,6 +3,7 @@ use rusqlite::Connection;
 use chrono::{DateTime, Utc};
 use anyhow::Result;
 use async_trait::async_trait;
+use url::Url;
 
 use crate::models::feed::{Feed, FeedId, FeedStatus};
 use crate::models::category::CategoryId;
@@ -74,17 +75,111 @@ impl FeedRepository for SqliteFeedRepository {
 
     async fn get_all_feeds(&self) -> Result<Vec<Feed>> {
         let conn = self.connection_pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
-                    last_fetched_at, next_fetch_at, created_at, updated_at 
-             FROM feeds 
-             ORDER BY title"
-        )?;
-
-        let rows = stmt.query_map([], |row| Ok(self.map_row(row)))?;
-        let feeds = rows.collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?;
+        
+        // Get all column names from the feeds table
+        let column_names = conn
+            .prepare("PRAGMA table_info(feeds)")?
+            .query_map([], |row| Ok(row.get::<_, String>(1)?))?
+            .collect::<Result<Vec<String>, _>>()?;
+        
+        // Build dynamic SQL query based on available columns
+        let mut select_parts = vec![
+            "id".to_string(), 
+            "category_id".to_string(), 
+            "title".to_string(), 
+            "url".to_string(), 
+            "status".to_string(), 
+            "error_message".to_string()
+        ];
+        
+        // Check for each optional column and provide NULL fallbacks if missing
+        let optional_columns = [
+            "icon_url",
+            "site_url",
+            "last_fetched_at", 
+            "next_fetch_at", 
+            "created_at", 
+            "updated_at"
+        ];
+        
+        for col in &optional_columns {
+            if column_names.contains(&col.to_string()) {
+                select_parts.push(col.to_string());
+            } else {
+                // Create owned string for each formatted column to avoid ownership issues
+                let null_column = format!("NULL as {}", col);
+                select_parts.push(null_column);
+            }
+        }
+        
+        let select_clause = select_parts.join(", ");
+        let sql = format!(
+            "SELECT {} FROM feeds ORDER BY title",
+            select_clause
+        );
+        
+        let mut stmt = conn.prepare(&sql)?;
+        let now = Utc::now();  // Default value for timestamp columns
+        
+        let rows = stmt.query_map([], |row| {
+            // Map each row with appropriate error handling for missing columns
+            let mut column_index = 0;
+            
+            // Required columns
+            let id: String = row.get(column_index)?;
+            column_index += 1;
+            
+            let category_id: Option<String> = row.get(column_index)?;
+            column_index += 1;
+            
+            let title: String = row.get(column_index)?;
+            column_index += 1;
+            
+            let url: Url = row.get(column_index)?;
+            column_index += 1;
+            
+            let status_str: String = row.get(column_index)?;
+            let status = FeedStatus::from_str(&status_str).unwrap_or(FeedStatus::Pending);
+            column_index += 1;
+            
+            let error_message: Option<String> = row.get(column_index)?;
+            column_index += 1;
+            
+            // Optional columns with fallbacks
+            let icon_url: Option<Url> = row.get(column_index).unwrap_or(None);
+            column_index += 1;
+            
+            let site_url: Option<Url> = row.get(column_index).unwrap_or(None);
+            column_index += 1;
+            
+            let last_fetched_at: Option<DateTime<Utc>> = row.get(column_index).unwrap_or(None);
+            column_index += 1;
+            
+            let next_fetch_at: Option<DateTime<Utc>> = row.get(column_index).unwrap_or(None);
+            column_index += 1;
+            
+            let created_at: DateTime<Utc> = row.get(column_index).unwrap_or(now);
+            column_index += 1;
+            
+            let updated_at: DateTime<Utc> = row.get(column_index).unwrap_or(now);
+            
+            Ok(Feed {
+                id: id.into(),
+                category_id: category_id.map(|s| s.into()),
+                title,
+                url,
+                status,
+                error_message,
+                icon_url,
+                site_url,
+                last_fetched_at,
+                next_fetch_at,
+                created_at,
+                updated_at,
+            })
+        })?;
+        
+        let feeds = rows.collect::<Result<Vec<_>, _>>()?;
         Ok(feeds)
     }
 

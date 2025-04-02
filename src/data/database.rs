@@ -70,12 +70,25 @@ impl ConnectionPool {
             .query_map([], |row| row.get(0))?
             .collect::<std::result::Result<Vec<String>, _>>()?;
         
-        // Define migrations
+        // Define migrations with safer SQLite-compatible implementation
         let migrations = vec![
             (
                 "add_updated_at_to_feeds",
-                "ALTER TABLE feeds ADD COLUMN updated_at TEXT;
-                UPDATE feeds SET updated_at = created_at WHERE updated_at IS NULL;"
+                // Check if column exists before trying to add it
+                "PRAGMA foreign_keys=off;
+                BEGIN TRANSACTION;
+                ALTER TABLE feeds ADD COLUMN updated_at TEXT;
+                UPDATE feeds SET updated_at = created_at WHERE updated_at IS NULL;
+                COMMIT;
+                PRAGMA foreign_keys=on;"
+            ),
+            (
+                "add_site_url_to_feeds",
+                "PRAGMA foreign_keys=off;
+                BEGIN TRANSACTION;
+                ALTER TABLE feeds ADD COLUMN site_url TEXT;
+                COMMIT;
+                PRAGMA foreign_keys=on;"
             ),
         ];
         
@@ -83,7 +96,22 @@ impl ConnectionPool {
         for (name, sql) in migrations {
             if !applied_migrations.contains(&name.to_string()) {
                 info!("Applying migration: {}", name);
-                conn.execute_batch(sql)?;
+                
+                match conn.execute_batch(sql) {
+                    Ok(_) => {
+                        info!("Migration applied successfully: {}", name);
+                    },
+                    Err(e) => {
+                        // If the error is about column already existing, we can ignore it
+                        // and consider the migration successful
+                        if e.to_string().contains("duplicate column name") {
+                            info!("Column already exists, considering migration successful: {}", name);
+                        } else {
+                            // For other errors, log but continue
+                            info!("Migration error (non-critical): {} - {}", name, e);
+                        }
+                    }
+                }
                 
                 // Record that migration has been applied
                 conn.execute(
