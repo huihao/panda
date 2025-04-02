@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use egui::{Button, Context, TopBottomPanel, RichText, Color32, CentralPanel, SidePanel};
+use egui::{Button, Context, TopBottomPanel, RichText, Color32, CentralPanel, SidePanel, Window};
 use tokio::runtime::Runtime;
 use crate::ui::AppContext;
 use crate::models::category::CategoryId;
@@ -182,10 +182,10 @@ impl App for MainView {
         }
         
         // Render category manager dialog if visible
-        // Fix: Wrap the category_manager.show call in a Window to provide a UI context
+        // Wrap the category_manager.show call in a Window to provide a UI context
         if self.show_categories {
             // Create a temporary window to provide a UI context for the category manager
-            egui::Window::new("Category Manager")
+            Window::new("Category Manager")
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {

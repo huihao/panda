@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use rusqlite::Connection;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -6,15 +6,16 @@ use chrono::{DateTime, Utc};
 
 use crate::models::article::ArticleId;
 use crate::models::tag::{Tag, TagId};
-use crate::base::repository_traits::TagRepository;
+use crate::base::repository::TagRepository;
+use crate::data::database::ConnectionPool;
 
 pub struct SqliteTagRepository {
-    connection: Arc<Mutex<Connection>>,
+    connection_pool: Arc<ConnectionPool>,
 }
 
 impl SqliteTagRepository {
-    pub fn new(connection: Arc<Mutex<Connection>>) -> Self {
-        Self { connection }
+    pub fn new(connection_pool: Arc<ConnectionPool>) -> Self {
+        Self { connection_pool }
     }
 
     fn map_row(&self, row: &rusqlite::Row) -> Result<Tag> {
@@ -32,7 +33,7 @@ impl SqliteTagRepository {
 #[async_trait]
 impl TagRepository for SqliteTagRepository {
     async fn save_tag(&self, tag: &Tag) -> Result<()> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         conn.execute(
             "INSERT INTO tags (id, name, description, color, created_at, updated_at) 
              VALUES (?, ?, ?, ?, ?, ?)",
@@ -49,7 +50,7 @@ impl TagRepository for SqliteTagRepository {
     }
 
     async fn get_tag_by_id(&self, id: &TagId) -> Result<Option<Tag>> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, description, color, created_at, updated_at 
              FROM tags 
@@ -65,7 +66,7 @@ impl TagRepository for SqliteTagRepository {
     }
 
     async fn get_tag_by_name(&self, name: &str) -> Result<Option<Tag>> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, description, color, created_at, updated_at 
              FROM tags 
@@ -81,7 +82,7 @@ impl TagRepository for SqliteTagRepository {
     }
 
     async fn get_all_tags(&self) -> Result<Vec<Tag>> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, description, color, created_at, updated_at 
              FROM tags 
@@ -96,7 +97,7 @@ impl TagRepository for SqliteTagRepository {
     }
 
     async fn update_tag(&self, tag: &Tag) -> Result<()> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         conn.execute(
             "UPDATE tags SET 
                 name = ?, 
@@ -116,13 +117,13 @@ impl TagRepository for SqliteTagRepository {
     }
 
     async fn delete_tag(&self, id: &TagId) -> Result<()> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         conn.execute("DELETE FROM tags WHERE id = ?", [id.to_string()])?;
         Ok(())
     }
 
     async fn search_tags(&self, query: &str) -> Result<Vec<Tag>> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let search_term = format!("%{}%", query);
         let mut stmt = conn.prepare(
             "SELECT id, name, description, color, created_at, updated_at 
@@ -139,7 +140,7 @@ impl TagRepository for SqliteTagRepository {
     }
 
     async fn get_tags_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Tag>> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, description, color, created_at, updated_at 
              FROM tags 
@@ -155,7 +156,7 @@ impl TagRepository for SqliteTagRepository {
     }
 
     async fn get_article_tags(&self, article_id: &ArticleId) -> Result<Vec<Tag>> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT t.id, t.name, t.description, t.color, t.created_at, t.updated_at 
              FROM tags t 
@@ -172,7 +173,7 @@ impl TagRepository for SqliteTagRepository {
     }
 
     async fn add_tag_to_article(&self, article_id: &ArticleId, tag_id: &TagId) -> Result<()> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         conn.execute(
             "INSERT OR IGNORE INTO article_tags (article_id, tag_id, created_at)
              VALUES (?, ?, datetime('now'))",
@@ -182,7 +183,7 @@ impl TagRepository for SqliteTagRepository {
     }
 
     async fn remove_tag_from_article(&self, article_id: &ArticleId, tag_id: &TagId) -> Result<()> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         conn.execute(
             "DELETE FROM article_tags WHERE article_id = ? AND tag_id = ?",
             rusqlite::params![article_id.to_string(), tag_id.to_string()],
@@ -191,7 +192,7 @@ impl TagRepository for SqliteTagRepository {
     }
 
     async fn get_articles_with_tag(&self, tag_id: &TagId) -> Result<Vec<String>> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT article_id 
              FROM article_tags 
@@ -204,7 +205,7 @@ impl TagRepository for SqliteTagRepository {
     }
 
     async fn get_most_used_tags(&self, limit: usize) -> Result<Vec<Tag>> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT t.id, t.name, t.description, t.color, t.created_at, t.updated_at,
                     COUNT(at.tag_id) as usage_count

@@ -1,19 +1,20 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use rusqlite::Connection;
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use crate::models::category::{Category, CategoryId};
-use crate::base::repository_traits::CategoryRepository;
+use crate::base::repository::CategoryRepository;
+use crate::data::database::ConnectionPool;
 
 pub struct SqliteCategoryRepository {
-    connection: Arc<Mutex<Connection>>,
+    connection_pool: Arc<ConnectionPool>,
 }
 
 impl SqliteCategoryRepository {
-    pub fn new(connection: Arc<Mutex<Connection>>) -> Self {
-        Self { connection }
+    pub fn new(connection_pool: Arc<ConnectionPool>) -> Self {
+        Self { connection_pool }
     }
 
     fn map_row(&self, row: &rusqlite::Row) -> Result<Category> {
@@ -33,7 +34,7 @@ impl SqliteCategoryRepository {
 impl CategoryRepository for SqliteCategoryRepository {
     async fn get_category_by_id(&self, id: &CategoryId) -> Result<Option<Category>> {
         // Store the connection lock in a variable to extend its lifetime
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
              FROM categories 
@@ -50,7 +51,7 @@ impl CategoryRepository for SqliteCategoryRepository {
     
     async fn get_all_categories(&self) -> Result<Vec<Category>> {
         // Store the connection lock in a variable to extend its lifetime
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
              FROM categories 
@@ -66,7 +67,7 @@ impl CategoryRepository for SqliteCategoryRepository {
     
     async fn get_categories_by_parent(&self, parent_id: &Option<CategoryId>) -> Result<Vec<Category>> {
         // Store the connection lock in a variable to extend its lifetime
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         
         let categories = match parent_id {
             Some(id) => {
@@ -100,7 +101,7 @@ impl CategoryRepository for SqliteCategoryRepository {
     
     async fn get_root_categories(&self) -> Result<Vec<Category>> {
         // Store the connection lock in a variable to extend its lifetime
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
              FROM categories 
@@ -117,7 +118,7 @@ impl CategoryRepository for SqliteCategoryRepository {
     
     async fn get_child_categories(&self, parent_id: &CategoryId) -> Result<Vec<Category>> {
         // Store the connection lock in a variable to extend its lifetime
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
              FROM categories 
@@ -133,7 +134,7 @@ impl CategoryRepository for SqliteCategoryRepository {
     }
     
     async fn save_category(&self, category: &Category) -> Result<()> {
-        self.connection.lock().unwrap().execute(
+        self.connection_pool.get()?.execute(
             "INSERT INTO categories (
                 id, name, description, parent_id, is_expanded, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -151,7 +152,7 @@ impl CategoryRepository for SqliteCategoryRepository {
     }
     
     async fn update_category(&self, category: &Category) -> Result<()> {
-        self.connection.lock().unwrap().execute(
+        self.connection_pool.get()?.execute(
             "UPDATE categories SET
                 name = ?,
                 description = ?,
@@ -172,13 +173,13 @@ impl CategoryRepository for SqliteCategoryRepository {
     }
     
     async fn delete_category(&self, id: &CategoryId) -> Result<()> {
-        self.connection.lock().unwrap().execute("DELETE FROM categories WHERE id = ?", [id.to_string()])?;
+        self.connection_pool.get()?.execute("DELETE FROM categories WHERE id = ?", [id.to_string()])?;
         Ok(())
     }
     
     async fn search_categories(&self, name: &str) -> Result<Vec<Category>> {
         // Store the connection lock in a variable to extend its lifetime
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let search_term = format!("%{}%", name);
         let mut stmt = conn.prepare(
             "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
@@ -196,7 +197,7 @@ impl CategoryRepository for SqliteCategoryRepository {
 
     async fn get_recently_updated_categories(&self, limit: usize) -> Result<Vec<Category>> {
         // Store the connection lock in a variable to extend its lifetime
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
              FROM categories 
@@ -222,7 +223,7 @@ impl CategoryRepository for SqliteCategoryRepository {
 
     async fn get_categories_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Category>> {
         // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, description, parent_id, is_expanded, created_at, updated_at 
              FROM categories 

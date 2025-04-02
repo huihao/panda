@@ -1,9 +1,13 @@
-mod article_repository;
-mod category_repository;
-mod feed_repository;
-mod tag_repository;
+// Make each repository module public to enable access to the implementations
+// This follows the Open/Closed Principle by making these modules extensible without modification
+pub mod article_repository;
+pub mod category_repository;
+pub mod feed_repository;
+pub mod tag_repository;
 
-pub use article_repository::*;
-pub use category_repository::*;
-pub use feed_repository::*;
-pub use tag_repository::*;
+// Re-export the concrete implementations to provide a cleaner public API
+// This follows the Interface Segregation Principle by exposing only what clients need
+pub use article_repository::SqliteArticleRepository;
+pub use category_repository::SqliteCategoryRepository;
+pub use feed_repository::SqliteFeedRepository;
+pub use tag_repository::SqliteTagRepository;

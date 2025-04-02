@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS feeds (
     icon_url TEXT,
     site_url TEXT,
     created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
     last_fetched_at TEXT,
     next_fetch_at TEXT,
     FOREIGN KEY(category_id) REFERENCES categories(id)

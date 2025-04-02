@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use rusqlite::Connection;
 use chrono::{DateTime, Utc};
 use anyhow::Result;
@@ -6,15 +6,16 @@ use async_trait::async_trait;
 
 use crate::models::feed::{Feed, FeedId, FeedStatus};
 use crate::models::category::CategoryId;
-use crate::base::repository_traits::FeedRepository;
+use crate::base::repository::FeedRepository;
+use crate::data::database::ConnectionPool;
 
 pub struct SqliteFeedRepository {
-    connection: Arc<Mutex<Connection>>,
+    connection_pool: Arc<ConnectionPool>,
 }
 
 impl SqliteFeedRepository {
-    pub fn new(connection: Arc<Mutex<Connection>>) -> Self {
-        Self { connection }
+    pub fn new(connection_pool: Arc<ConnectionPool>) -> Self {
+        Self { connection_pool }
     }
 
     fn map_row(&self, row: &rusqlite::Row) -> Result<Feed> {
@@ -38,8 +39,7 @@ impl SqliteFeedRepository {
 #[async_trait]
 impl FeedRepository for SqliteFeedRepository {
     async fn get_feed_by_id(&self, id: &FeedId) -> Result<Option<Feed>> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                     last_fetched_at, next_fetch_at, created_at, updated_at 
@@ -56,8 +56,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn get_feed_by_url(&self, url: &str) -> Result<Option<Feed>> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                     last_fetched_at, next_fetch_at, created_at, updated_at 
@@ -74,8 +73,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn get_all_feeds(&self) -> Result<Vec<Feed>> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                     last_fetched_at, next_fetch_at, created_at, updated_at 
@@ -91,8 +89,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn get_feeds_by_category(&self, category_id: &CategoryId) -> Result<Vec<Feed>> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                     last_fetched_at, next_fetch_at, created_at, updated_at 
@@ -109,8 +106,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn get_enabled_feeds(&self) -> Result<Vec<Feed>> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                     last_fetched_at, next_fetch_at, created_at, updated_at 
@@ -127,8 +123,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn get_feeds_to_update(&self) -> Result<Vec<Feed>> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                     last_fetched_at, next_fetch_at, created_at, updated_at 
@@ -145,8 +140,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn search_feeds(&self, query: &str) -> Result<Vec<Feed>> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let search_term = format!("%{}%", query);
         let mut stmt = conn.prepare(
             "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
@@ -164,8 +158,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn get_feeds_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Feed>> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                     last_fetched_at, next_fetch_at, created_at, updated_at 
@@ -182,8 +175,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn get_recently_updated_feeds(&self, limit: usize) -> Result<Vec<Feed>> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, category_id, title, url, status, error_message, icon_url, site_url,
                     last_fetched_at, next_fetch_at, created_at, updated_at 
@@ -200,8 +192,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn get_most_active_feeds(&self, limit: usize) -> Result<Vec<Feed>> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT f.id, f.category_id, f.title, f.url, f.status, f.error_message, f.icon_url, f.site_url,
                     f.last_fetched_at, f.next_fetch_at, f.created_at, f.updated_at 
@@ -223,8 +214,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn save_feed(&self, feed: &Feed) -> Result<()> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         conn.execute(
             "INSERT INTO feeds (
                 id, category_id, title, url, status, error_message, icon_url, site_url,
@@ -249,8 +239,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn update_feed(&self, feed: &Feed) -> Result<()> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         conn.execute(
             "UPDATE feeds SET 
                 category_id = ?,
@@ -282,8 +271,7 @@ impl FeedRepository for SqliteFeedRepository {
     }
 
     async fn delete_feed(&self, id: &FeedId) -> Result<()> {
-        // 锁定连接
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         conn.execute("DELETE FROM feeds WHERE id = ?", [id.to_string()])?;
         Ok(())
     }

@@ -9,10 +9,13 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use log::{info, warn};
 use url::Url;
-use data::Database;
+// Use the re-exported Database to follow Interface Segregation Principle
+use crate::data::Database;
+use crate::data::repositories::*; // Import repositories directly
 use services::{RssService, WebViewService, SyncService, OpmlService};
 use ui::views::main::MainView;
 use eframe::egui;
+use egui::ViewportBuilder;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,19 +40,21 @@ async fn main() -> Result<()> {
     let category_repository = database.get_category_repository();
     let tag_repository = database.get_tag_repository();
     
-    // Initialize services
+    // Initialize services - Fix the argument order to match the service constructor signature
+    // Following Liskov Substitution Principle by ensuring proper contract adherence
     let rss_service = Arc::new(RssService::new(
-        feed_repository.clone(),
         article_repository.clone(),
+        feed_repository.clone(),
         category_repository.clone(),
         tag_repository.clone(),
     ));
-    let webview_service = Arc::new(WebViewService::new(article_repository.clone()));
+    let webview_service = Arc::new(WebViewService::new());
     let sync_service = Arc::new(SyncService::new(rss_service.clone()));
     let opml_service = Arc::new(OpmlService::new(rss_service.clone()));
     
     // Check if there are any feeds in the database
-    let feeds = feed_repository.get_all_feeds()?;
+    // Add `.await` to properly handle the Future returned by async functions
+    let feeds = feed_repository.get_all_feeds().await?;
     
     // Add a default feed if none exists
     if feeds.is_empty() {
@@ -81,15 +86,17 @@ async fn main() -> Result<()> {
         warn!("Failed to sync all feeds: {}", e);
     }
     
-    // Prepare the main view and UI configuration
-    let main_view = MainView::new(
-        feed_repository,
-        category_repository,
+    // Create an AppContext instance with the required repositories
+    // The AppContext constructor will create its own services internally
+    let app_context = ui::AppContext::new(
         article_repository,
-        rss_service,
-        webview_service,
-        sync_service,
+        category_repository,
+        feed_repository,
+        tag_repository,
     );
+    
+    // Pass the AppContext to MainView::new
+    let main_view = MainView::new(app_context);
     
     // Run the UI in a separate thread or context to avoid Send issues
     // This follows the Dependency Inversion Principle by isolating the UI framework
@@ -102,16 +109,19 @@ async fn main() -> Result<()> {
 /// Runs the egui-based UI with the given MainView
 /// This separates the UI thread from the tokio async runtime to avoid Send trait issues
 fn run_ui(main_view: MainView) -> Result<()> {
-    // Create and run the main view
+    // Create and run the main view with updated options
     let options = eframe::NativeOptions {
-        initial_window_size: Some(egui::vec2(1200.0, 800.0)),
+        viewport: ViewportBuilder::default()
+            .with_inner_size([1200.0, 800.0])
+            .with_title("Panda RSS Reader"),
         ..Default::default()
     };
     
     // Use a separate Result handling for the eframe call to properly convert errors
     // The closure now correctly returns a Result<Box<dyn eframe::App>, Box<dyn Error>>
     match eframe::run_native(
-        "Panda RSS Reader",
+        // The window title is now set in the viewport builder, so we pass an empty string here
+        "",
         options,
         Box::new(|_cc| -> Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync + 'static>> {
             // Wrap the main_view in Ok to satisfy the Result return type

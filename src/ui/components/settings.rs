@@ -1,4 +1,4 @@
-use egui::{Ui, Window, RichText};
+use egui::{Ui, Window, RichText, Context, DragValue, ViewportCommand};
 use std::sync::Arc;
 use anyhow::Result;
 
@@ -96,7 +96,7 @@ fn ui_content(
 
         ui.horizontal(|ui| {
             ui.label("Sync Interval (minutes):");
-            ui.add(egui::DragValue::new(sync_interval)
+            ui.add(DragValue::new(sync_interval)
                 .clamp_range(15..=1440));
         });
 
@@ -106,7 +106,7 @@ fn ui_content(
 
         ui.horizontal(|ui| {
             ui.label("Article Retention (days):");
-            ui.add(egui::DragValue::new(article_retention_days)
+            ui.add(DragValue::new(article_retention_days)
                 .clamp_range(1..=365));
         });
 
@@ -115,7 +115,7 @@ fn ui_content(
         // The save button sets a close flag in egui that will be handled by the window
         if ui.button("Save Changes").clicked() {
             // Return true to indicate we want to close the dialog
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            ui.ctx().send_viewport_cmd(ViewportCommand::Close);
         }
     });
 

@@ -12,6 +12,9 @@ pub trait TagRepository: Send + Sync {
     /// Saves a tag to the repository
     async fn save_tag(&self, tag: &Tag) -> Result<()>;
     
+    /// Retrieves a tag by its ID
+    async fn get_tag_by_id(&self, id: &TagId) -> Result<Option<Tag>>;
+    
     /// Retrieves a tag by its name
     async fn get_tag_by_name(&self, name: &str) -> Result<Option<Tag>>;
     

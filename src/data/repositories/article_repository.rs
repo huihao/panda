@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use rusqlite::Connection;
 use chrono::{DateTime, Utc};
 use anyhow::Result;
@@ -8,15 +8,16 @@ use crate::models::article::{Article, ArticleId, ReadStatus};
 use crate::models::feed::FeedId;
 use crate::models::category::CategoryId;
 use crate::models::tag::TagId;
-use crate::base::repository_traits::ArticleRepository;
+use crate::base::repository::ArticleRepository;
+use crate::data::database::ConnectionPool;
 
 pub struct SqliteArticleRepository {
-    connection: Arc<Mutex<Connection>>,
+    connection_pool: Arc<ConnectionPool>,
 }
 
 impl SqliteArticleRepository {
-    pub fn new(connection: Arc<Mutex<Connection>>) -> Self {
-        Self { connection }
+    pub fn new(connection_pool: Arc<ConnectionPool>) -> Self {
+        Self { connection_pool }
     }
 
     fn map_row(&self, row: &rusqlite::Row) -> Result<Article> {
@@ -40,8 +41,8 @@ impl SqliteArticleRepository {
 #[async_trait]
 impl ArticleRepository for SqliteArticleRepository {
     async fn get_article(&self, id: &ArticleId) -> Result<Option<Article>> {
-        // Store the connection lock in a variable to extend its lifetime
-        let conn = self.connection.lock().unwrap();
+        // Get a connection from the pool
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, feed_id, title, url, author, content, summary, 
                     published_at, read_status, is_favorited, created_at, updated_at 
@@ -58,8 +59,7 @@ impl ArticleRepository for SqliteArticleRepository {
     }
 
     async fn get_all_articles(&self) -> Result<Vec<Article>> {
-        // Store the connection lock in a variable to extend its lifetime
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, feed_id, title, url, author, content, summary,
                     published_at, read_status, is_favorited, created_at, updated_at 
@@ -75,8 +75,7 @@ impl ArticleRepository for SqliteArticleRepository {
     }
 
     async fn get_articles_by_feed(&self, feed_id: &FeedId) -> Result<Vec<Article>> {
-        // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, feed_id, title, url, author, content, summary,
                     published_at, read_status, is_favorited, created_at, updated_at 
@@ -94,7 +93,7 @@ impl ArticleRepository for SqliteArticleRepository {
 
     async fn get_articles_by_category(&self, category_id: &CategoryId) -> Result<Vec<Article>> {
         // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT a.id, a.feed_id, a.title, a.url, a.author, a.content, 
                     a.summary, a.published_at, a.read_status, a.is_favorited, 
@@ -114,7 +113,7 @@ impl ArticleRepository for SqliteArticleRepository {
     
     async fn get_article_by_url(&self, url: &str) -> Result<Option<Article>> {
         // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, feed_id, title, url, author, content, summary, 
                     published_at, read_status, is_favorited, created_at, updated_at 
@@ -132,7 +131,7 @@ impl ArticleRepository for SqliteArticleRepository {
     
     async fn add_tag(&self, article_id: &ArticleId, tag: &str) -> Result<()> {
         // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         
         // 检查标签是否存在，如果不存在则创建
         let mut stmt = conn.prepare(
@@ -164,7 +163,7 @@ impl ArticleRepository for SqliteArticleRepository {
     
     async fn remove_tag(&self, article_id: &ArticleId, tag: &str) -> Result<()> {
         // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         
         // 查找标签ID
         let mut stmt = conn.prepare(
@@ -184,7 +183,7 @@ impl ArticleRepository for SqliteArticleRepository {
     
     async fn get_article_tags(&self, article_id: &ArticleId) -> Result<Vec<String>> {
         // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         
         let mut stmt = conn.prepare(
             "SELECT t.name 
@@ -201,7 +200,7 @@ impl ArticleRepository for SqliteArticleRepository {
 
     async fn get_articles_by_tag(&self, tag: &str) -> Result<Vec<Article>> {
         // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         
         // 先查找标签ID
         let mut stmt = conn.prepare(
@@ -230,7 +229,7 @@ impl ArticleRepository for SqliteArticleRepository {
     
     async fn get_unread_articles(&self) -> Result<Vec<Article>> {
         // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, feed_id, title, url, author, content, summary,
                     published_at, read_status, is_favorited, created_at, updated_at 
@@ -248,7 +247,7 @@ impl ArticleRepository for SqliteArticleRepository {
 
     async fn get_favorite_articles(&self) -> Result<Vec<Article>> {
         // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, feed_id, title, url, author, content, summary,
                     published_at, read_status, is_favorited, created_at, updated_at 
@@ -266,7 +265,7 @@ impl ArticleRepository for SqliteArticleRepository {
 
     async fn search_articles(&self, query: &str) -> Result<Vec<Article>> {
         // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let search_term = format!("%{}%", query);
         let mut stmt = conn.prepare(
             "SELECT id, feed_id, title, url, author, content, summary,
@@ -285,7 +284,7 @@ impl ArticleRepository for SqliteArticleRepository {
 
     async fn get_articles_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Article>> {
         // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, feed_id, title, url, author, content, summary,
                     published_at, read_status, is_favorited, created_at, updated_at 
@@ -302,8 +301,7 @@ impl ArticleRepository for SqliteArticleRepository {
     }
 
     async fn save_article(&self, article: &Article) -> Result<()> {
-        // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         conn.execute(
             "INSERT INTO articles (
                 id, feed_id, title, url, author, content, summary, published_at,
@@ -328,8 +326,7 @@ impl ArticleRepository for SqliteArticleRepository {
     }
 
     async fn update_article(&self, article: &Article) -> Result<()> {
-        // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         conn.execute(
             "UPDATE articles SET
                 feed_id = ?,
@@ -361,8 +358,7 @@ impl ArticleRepository for SqliteArticleRepository {
     }
 
     async fn delete_article(&self, id: &ArticleId) -> Result<()> {
-        // 锁定连接以延长其生命周期
-        let conn = self.connection.lock().unwrap();
+        let conn = self.connection_pool.get()?;
         conn.execute("DELETE FROM articles WHERE id = ?", [id.to_string()])?;
         Ok(())
     }

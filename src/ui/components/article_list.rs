@@ -56,7 +56,7 @@ impl ArticleList {
 
             if ui.add(
                 egui::Button::new(RichText::new(&text).color(color))
-                    .wrap(true)
+                    .wrap()
                     .min_size(egui::vec2(0.0, 60.0))
             ).clicked() {
                 selected = Some(article.id.clone());
