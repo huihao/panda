@@ -63,19 +63,15 @@ impl FeedManager {
                         
                         ui.horizontal(|ui| {
                             if ui.button("Add").clicked() {
-                                // Use a tokio runtime to handle async code in a sync context
-                                let fut = self.add_feed();
-                                let rt = tokio::runtime::Handle::current();
-                                match rt.block_on(fut) {
-                                    Err(e) => {
-                                        error!("Failed to add feed: {}", e);
-                                        self.error_message = Some(e.to_string());
-                                    },
-                                    Ok(_) => {
-                                        self.visible = false;
-                                        self.url_input.clear();
-                                        self.error_message = None;
-                                    }
+                                // Create a runtime to handle the async operation
+                                let rt = tokio::runtime::Runtime::new().unwrap();
+                                if let Err(e) = rt.block_on(self.add_feed()) {
+                                    error!("Failed to add feed: {}", e);
+                                    self.error_message = Some(e.to_string());
+                                } else {
+                                    self.visible = false;
+                                    self.url_input.clear();
+                                    self.error_message = None;
                                 }
                             }
                             

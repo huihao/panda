@@ -29,6 +29,7 @@ pub struct MainView {
     selected_article: Option<ArticleId>,
     show_categories: bool,
     show_settings: bool,
+    show_feed_manager: bool,
 }
 
 impl MainView {
@@ -72,6 +73,7 @@ impl MainView {
             selected_article: None,
             show_categories: false,
             show_settings: false,
+            show_feed_manager: false
         }
     }
 
@@ -84,6 +86,9 @@ impl MainView {
 
         TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                if ui.add(Button::new("FeedManage")).clicked() {
+                    self.show_feed_manager = !self.show_feed_manager;
+                }
                 if ui.add(Button::new("Categories")).clicked() {
                     self.show_categories = !self.show_categories;
                 }
@@ -97,6 +102,25 @@ impl MainView {
                 }
             });
         });
+
+        // Display the feed manager window when show_feed_manager is true
+        if self.show_feed_manager {
+            Window::new("Feed Manager")
+                .collapsible(false)
+                .resizable(true)
+                .show(ctx, |ui| {
+                    // Add a close button at the top
+                    if ui.button("Close").clicked() {
+                        self.show_feed_manager = false;
+                    }
+                    
+                    // Show feed manager UI
+                    if let Err(e) = self.feed_manager.show(ui) {
+                        eprintln!("Error rendering feed manager: {}", e);
+                        self.set_status_message(format!("Error displaying feed manager: {}", e));
+                    }
+                });
+        }
 
         if let Some((msg, time)) = &self.status_message {
             if time.elapsed() > Duration::from_secs(5) {
@@ -166,12 +190,6 @@ impl App for MainView {
                     eprintln!("Error rendering article list: {}", e);
                 }
             }
-            
-            // Also allow the feed manager to show itself if needed
-            // It manages its own Window internally so we just pass the UI context
-            if let Err(e) = self.feed_manager.show(ui) {
-                eprintln!("Error rendering feed manager: {}", e);
-            }
         });
         
         // Render settings dialog if visible
@@ -180,8 +198,7 @@ impl App for MainView {
                 eprintln!("Error rendering settings dialog: {}", e);
             }
         }
-        
-        // Render category manager dialog if visible
+
         // Wrap the category_manager.show call in a Window to provide a UI context
         if self.show_categories {
             // Create a temporary window to provide a UI context for the category manager
