@@ -312,4 +312,9 @@ impl RssService {
     pub async fn update_article(&self, article: &Article) -> Result<()> {
         self.article_repository.update_article(article).await
     }
+
+    /// Gets a feed by its URL
+    pub async fn get_feed_by_url(&self, url: &str) -> Result<Option<Feed>> {
+        Ok(self.feed_repository.get_feed_by_url(url).await?)
+    }
 }

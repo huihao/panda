@@ -199,6 +199,7 @@ impl App for MainView {
             }
         }
 
+        
         // Wrap the category_manager.show call in a Window to provide a UI context
         if self.show_categories {
             // Create a temporary window to provide a UI context for the category manager
