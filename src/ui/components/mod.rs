@@ -3,7 +3,7 @@ mod article_viewer;
 mod category_manager;
 mod feed_manager;
 mod settings;
-mod sidebar;
+pub mod sidebar;
 
 pub use article_list::*;
 pub use article_viewer::*;

@@ -6,9 +6,12 @@ mod utils;
 mod ui;
 
 use std::sync::Arc;
+use std::thread;
 use anyhow::{Result, anyhow};
 use log::{info, warn};
 use url::Url;
+use tokio::sync::mpsc;
+use tokio::runtime::Runtime;
 // Use the re-exported Database to follow Interface Segregation Principle
 use crate::data::Database;
 use crate::data::repositories::*; // Import repositories directly
@@ -17,12 +20,42 @@ use ui::views::main::MainView;
 use eframe::egui;
 use egui::ViewportBuilder;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+// Main function with no tokio::main attribute - we'll create the runtime manually
+fn main() -> Result<()> {
     // Set up logging
     env_logger::init();
     info!("Starting Panda RSS reader...");
     
+    // Create a new channel for communicating between the async thread and UI thread
+    let (tx, rx) = mpsc::channel(100);
+    
+    // Start the async operations in a separate thread
+    let async_thread = thread::spawn(move || {
+        // Create a new runtime for this thread
+        let runtime = Runtime::new().expect("Failed to create Tokio runtime");
+        
+        // Use runtime.block_on to run our async initialization
+        runtime.block_on(async {
+            init_async_services(tx).await
+        })
+    });
+    
+    // Initialize UI on the main thread (without being inside a Tokio runtime)
+    let main_view = init_ui(rx)?;
+    
+    // Run the UI on the main thread
+    run_ui(main_view)?;
+    
+    // Wait for the async thread to complete if necessary
+    if let Err(e) = async_thread.join() {
+        warn!("Async thread panicked: {:?}", e);
+    }
+    
+    Ok(())
+}
+
+/// Initialize all async services and return an AppContext
+async fn init_async_services(tx: mpsc::Sender<()>) -> Result<()> {
     // Initialize database with a path to the SQLite database file
     let database_path = "data/panda.db";
     
@@ -53,7 +86,6 @@ async fn main() -> Result<()> {
     let opml_service = Arc::new(OpmlService::new(rss_service.clone()));
     
     // Check if there are any feeds in the database
-    // Add `.await` to properly handle the Future returned by async functions
     let feeds = feed_repository.get_all_feeds().await?;
     
     // Add a default feed if none exists
@@ -86,28 +118,41 @@ async fn main() -> Result<()> {
         warn!("Failed to sync all feeds: {}", e);
     }
     
-    // Create an AppContext instance with the required repositories
-    // The AppContext constructor will create its own services internally
-    let app_context = ui::AppContext::new(
+    // Signal that initialization is complete
+    let _ = tx.send(()).await;
+    
+    Ok(())
+}
+
+/// Initialize the UI components
+fn init_ui(rx: mpsc::Receiver<()>) -> Result<MainView> {
+    // Create database connection for UI thread
+    let database_path = "data/panda.db";
+    let database = Database::new(database_path)?;
+    
+    // Get repository instances for UI
+    let article_repository = database.get_article_repository();
+    let category_repository = database.get_category_repository();
+    let feed_repository = database.get_feed_repository();
+    let tag_repository = database.get_tag_repository();
+    
+    // Create an AppContext instance with the repositories
+    // The new constructor only requires repositories
+    let app_context: ui::AppContext = ui::AppContext::new(
         article_repository,
         category_repository,
         feed_repository,
         tag_repository,
     );
     
-    // Pass the AppContext to MainView::new
+    // Create the main view
     let main_view = MainView::new(app_context);
     
-    // Run the UI in a separate thread or context to avoid Send issues
-    // This follows the Dependency Inversion Principle by isolating the UI framework
-    // from the async runtime
-    run_ui(main_view)?;
-    
-    Ok(())
+    Ok(main_view)
 }
 
 /// Runs the egui-based UI with the given MainView
-/// This separates the UI thread from the tokio async runtime to avoid Send trait issues
+/// This function is now completely separate from any Tokio runtime
 fn run_ui(main_view: MainView) -> Result<()> {
     // Create and run the main view with updated options
     let options = eframe::NativeOptions {
@@ -118,7 +163,6 @@ fn run_ui(main_view: MainView) -> Result<()> {
     };
     
     // Use a separate Result handling for the eframe call to properly convert errors
-    // The closure now correctly returns a Result<Box<dyn eframe::App>, Box<dyn Error>>
     match eframe::run_native(
         // The window title is now set in the viewport builder, so we pass an empty string here
         "",

@@ -3,6 +3,10 @@ use std::fs;
 use std::path::Path;
 use anyhow::{Result, Context};
 
+mod db_inspector;
+
+pub use db_inspector::*;
+
 pub fn current_timestamp() -> DateTime<Utc> {
     Utc::now()
 }

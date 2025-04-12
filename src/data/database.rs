@@ -1,8 +1,8 @@
 use std::path::Path;
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, Context};
 use std::sync::{Arc, Mutex};
 use rusqlite::{Connection, OpenFlags};
-use log::info;
+use log::{info, warn, debug};
 
 // Import the repository traits from the base module
 use crate::base::repository::{
@@ -20,6 +20,9 @@ use crate::data::repositories::{
     SqliteCategoryRepository,
     SqliteTagRepository
 };
+
+// Import migration manager for schema updates
+use crate::data::migration::MigrationManager;
 
 /// A simple connection pool implementation to avoid dependency conflicts
 /// with external connection pool libraries
@@ -40,8 +43,10 @@ impl ConnectionPool {
         // Initialize schema on the first connection
         initial_connection.execute_batch(include_str!("../../data/schema.sql"))?;
         
-        // Run migrations to ensure the database schema is up-to-date
-        Self::run_migrations(&initial_connection)?;
+        // Run migrations to ensure the database schema is up-to-date using the new MigrationManager
+        let migration_manager = MigrationManager::new(&initial_connection);
+        migration_manager.run_migrations()
+            .context("Failed to run database migrations")?;
         
         connections.push(initial_connection);
         
@@ -50,78 +55,6 @@ impl ConnectionPool {
             db_path: db_path.to_string(),
             max_connections,
         })
-    }
-    
-    /// Run database migrations to ensure schema is up-to-date
-    fn run_migrations(conn: &Connection) -> Result<()> {
-        // Check if migration table exists, if not create it
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS migrations (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                applied_at TEXT NOT NULL
-            )",
-            [],
-        )?;
-        
-        // Check which migrations have been applied
-        let mut stmt = conn.prepare("SELECT name FROM migrations")?;
-        let applied_migrations: Vec<String> = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<String>, _>>()?;
-        
-        // Define migrations with safer SQLite-compatible implementation
-        let migrations = vec![
-            (
-                "add_updated_at_to_feeds",
-                // Check if column exists before trying to add it
-                "PRAGMA foreign_keys=off;
-                BEGIN TRANSACTION;
-                ALTER TABLE feeds ADD COLUMN updated_at TEXT;
-                UPDATE feeds SET updated_at = created_at WHERE updated_at IS NULL;
-                COMMIT;
-                PRAGMA foreign_keys=on;"
-            ),
-            (
-                "add_site_url_to_feeds",
-                "PRAGMA foreign_keys=off;
-                BEGIN TRANSACTION;
-                ALTER TABLE feeds ADD COLUMN site_url TEXT;
-                COMMIT;
-                PRAGMA foreign_keys=on;"
-            ),
-        ];
-        
-        // Apply any migrations that haven't been applied yet
-        for (name, sql) in migrations {
-            if !applied_migrations.contains(&name.to_string()) {
-                info!("Applying migration: {}", name);
-                
-                match conn.execute_batch(sql) {
-                    Ok(_) => {
-                        info!("Migration applied successfully: {}", name);
-                    },
-                    Err(e) => {
-                        // If the error is about column already existing, we can ignore it
-                        // and consider the migration successful
-                        if e.to_string().contains("duplicate column name") {
-                            info!("Column already exists, considering migration successful: {}", name);
-                        } else {
-                            // For other errors, log but continue
-                            info!("Migration error (non-critical): {} - {}", name, e);
-                        }
-                    }
-                }
-                
-                // Record that migration has been applied
-                conn.execute(
-                    "INSERT INTO migrations (name, applied_at) VALUES (?, datetime('now'))",
-                    [name],
-                )?;
-            }
-        }
-        
-        Ok(())
     }
     
     /// Create a new SQLite connection
